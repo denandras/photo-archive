@@ -49,7 +49,7 @@ def main():
         cache = json.load(f)
 
     s3 = get_s3_client()
-    from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted
+    from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private
     rules = parse_whitelist(load_whitelist_text(s3, BUCKET, SCAN_PREFIX + "public-list.txt"))
     print(f"Whitelist: {len(rules)} rule(s)")
 
@@ -65,6 +65,8 @@ def main():
                 continue
             if not is_whitelisted(key[len(SCAN_PREFIX):], rules):
                 continue
+            if is_private(key[len(SCAN_PREFIX):]):
+                continue  # dot+p private marker: never reaches the site
             ckey = f"{key}|{obj['Size']}|{obj['ETag']}"
             rec = cache.get(ckey)
             if not rec:

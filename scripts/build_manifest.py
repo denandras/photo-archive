@@ -21,7 +21,7 @@ from datetime import datetime
 
 import boto3
 
-from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted
+from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private
 
 OUTPUT_FILE = "public/manifest.json"
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".manifest_cache.json")
@@ -111,9 +111,18 @@ def main():
             cache = {}
 
     all_images = list_s3_images(s3, limit)
-    images = [o for o in all_images
-              if is_whitelisted(o["key"][len(SCAN_PREFIX):], rules)]
-    print(f"{len(all_images)} images under {SCAN_PREFIX}, {len(images)} whitelisted")
+    priv_n = 0
+    whitelisted = []
+    for o in all_images:
+        if not is_whitelisted(o["key"][len(SCAN_PREFIX):], rules):
+            continue
+        if is_private(o["key"][len(SCAN_PREFIX):]):
+            priv_n += 1  # private marker: folder/title with dot+p -> never published
+            continue
+        whitelisted.append(o)
+    images = whitelisted
+    print(f"{len(all_images)} images under {SCAN_PREFIX}, {len(images)} whitelisted, "
+          f"{priv_n} .p-private excluded")
 
     manifest = {"years": {}}
     fetched = reused = public_n = untagged = 0

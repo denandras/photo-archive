@@ -15,12 +15,33 @@ const s3Client = new S3Client({
   forcePathStyle: true,
 });
 
+// A dot + lowercase p on a title marks it private ("date.p" folder, "name.p.jpg"
+// file): excluded server-side at every layer, including this final one.
+const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".webp", ".heic"];
+function isPrivate(key: string): boolean {
+  return key.split("/").some((part) => {
+    const low = part.toLowerCase();
+    for (const ext of IMAGE_EXTS) {
+      if (low.endsWith(ext)) {
+        part = part.slice(0, -ext.length);
+        break;
+      }
+    }
+    return part.endsWith(".p");
+  });
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const key = searchParams.get("key");
 
   if (!key) {
     return NextResponse.json({ error: "Missing key" }, { status: 400 });
+  }
+
+  if (isPrivate(key)) {
+    // Private marker on any path component (folder or file): not on the site.
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   try {

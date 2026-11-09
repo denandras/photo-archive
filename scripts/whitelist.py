@@ -19,6 +19,27 @@ from datetime import datetime
 
 import boto3
 
+# Image extensions whose trailing suffix must be stripped before the
+# private-marker check (so "name.p.jpg" resolves to stem "name.p").
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".heic")
+
+
+def _stem(name: str) -> str:
+    low = name.lower()
+    for ext in _IMAGE_EXTS:
+        if low.endswith(ext):
+            return name[: -len(ext)]
+    return name
+
+
+def is_private(key: str) -> bool:
+    """A dot + LOWERCASE p on a title marks it private, never to reach the site:
+    a folder "date.p" (everything under it) or a file "name.p[.jpg]".
+
+    Case-sensitive: ".P" is NOT a private marker (per spec, small p only).
+    """
+    return any(_stem(part).endswith(".p") for part in key.split("/"))
+
 
 def load_whitelist_text(s3, bucket: str, key: str) -> str:
     try:
