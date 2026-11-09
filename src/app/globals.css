@@ -53,6 +53,11 @@ body {
 
 .scroll-track {
   display: flex;
+  /* b33: positioned = offsetLeft of cards is TRACK-local. Unpositioned, they
+     anchor to the body and the load-range math (spans − p − B) went out of
+     bounds — rows loaded nothing on mobile (first rows empty, second rows
+     drained with no refills). */
+  position: relative;
   /* Copies carry their own trailing pad (inter-copy gap == intra-copy gap) */
   width: max-content;
   /* Persist the transform layer so image decodes never demote it (b20) */
