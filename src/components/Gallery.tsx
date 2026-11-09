@@ -6,10 +6,11 @@ import { createPortal } from "react-dom";
 type Photo = { src: string; full: string; key: string; w: number; h: number };
 
 const DRAG_THRESHOLD = 6;
-/* Horizontal look-ahead per side, in px — must cover a full drag-flick in
-   BOTH directions: the auto-stream only pre-fills forward, a backward drag
-   reveals territory it never visited (b31). */
-const LOAD_MARGIN = 2000;
+/* Horizontal look-ahead per side, in px. b36: 2000 flooded phones — every
+   visible row prefetched ~40 thumbs both ways × 12 rows ≈ 400+ fetches on
+   cellular, the copy-count commit starved and rows rendered as plain space.
+   900 still covers a drag-flick and keeps the backward twins pre-loaded. */
+const LOAD_MARGIN = 900;
 /* Vertical band: rows compute their in-range cards only near the viewport */
 const V_BAND = 900;
 
@@ -223,8 +224,11 @@ function ScrollRow({
      within one copy; every replica uses the same mapping. */
   const spansRef = useRef<{ l: number; r: number }[] | null>(null); // first-copy card spans
   const baseShiftRef = useRef(0); // left base offset covering the left load band
+  const committedRepsRef = useRef(3); // copies actually in the DOM (post-commit)
   const inRangeRef = useRef<Set<number>>(new Set());
   const [inRange, setInRangeState] = useState<Set<number>>(new Set());
+  // sync the committed copy count after each React commit
+  useEffect(() => { committedRepsRef.current = reps; }, [reps]);
   // setState only when the set actually changes (rAF loop calls every frame)
   const setInRange = useCallback((next: Set<number>) => {
     const prev = inRangeRef.current;
@@ -299,7 +303,7 @@ function ScrollRow({
           // something to reveal. Copies needed = (vw + 2M + B) / half + 1.
           const B = Math.ceil(LOAD_MARGIN / half) * half;
           const needed = Math.min(
-            12, // hard cap: a wild copy measurement must never explode the DOM
+            8, // hard cap (b36 was 12): fewer copies = lighter DOM commit
             Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
           );
           // grow-only (b35): bidirectional resizing let a jittery re-measure
@@ -309,14 +313,20 @@ function ScrollRow({
             repsRef.current = needed;
             setReps(needed);
           }
-          baseShiftRef.current = B;
-          track.style.transform = `translate3d(${-(p + B)}px, 0, 0)`;
+          // b36: apply the base shift ONLY once the grown copies are actually
+          // committed — until then -B would push the initial 3 copies wholly
+          // left of the screen (cold phones: "everything on the left, plain
+          // space"). Unshifted, the screen always shows layout [p, p+vw].
+          const Bok = committedRepsRef.current >= needed;
+          const Bv = Bok ? B : 0;
+          baseShiftRef.current = Bv;
+          track.style.transform = `translate3d(${-(p + Bv)}px, 0, 0)`;
           const next = new Set<number>();
           for (let c = 0; c < repsRef.current; c++) {
             const cOff = c * half;
             for (let i = 0; i < spans.length; i++) {
-              const l = spans[i].l + cOff - p - B;
-              const r = spans[i].r + cOff - p - B;
+              const l = spans[i].l + cOff - p - Bv;
+              const r = spans[i].r + cOff - p - Bv;
               if (r > -LOAD_MARGIN && l < vw + LOAD_MARGIN) next.add(i);
             }
           }
@@ -351,7 +361,7 @@ function ScrollRow({
             // the load band on both sides + the left base shift
             const B = Math.ceil(LOAD_MARGIN / half) * half;
             const needed = Math.min(
-              12,
+              8,
               Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
             );
             // grow-only, mirrors the eager path (b35)
