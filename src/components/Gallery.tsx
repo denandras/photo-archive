@@ -7,6 +7,11 @@ type Photo = { src: string; full: string; key: string; w: number; h: number };
 
 const DRAG_THRESHOLD = 6;
 
+/* Photos whose thumb is known fetched (any replica instance) — a sibling
+   instance mounts/enters instantly loaded instead of re-IO-gating (b27):
+   entering cards used to render blank for a beat while their own IO fired. */
+const seenThumbKeys = new Set<string>();
+
 function PhotoCard({
   photo,
   dataIdx,
@@ -48,10 +53,16 @@ function PhotoCard({
       setActive(true);
       return;
     }
+    // Any sibling instance already fetched this thumb: load instantly, no IO
+    if (seenThumbKeys.has(photo.key)) {
+      setActive(true);
+      return;
+    }
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
           if (e.isIntersecting) {
+            seenThumbKeys.add(photo.key);
             setActive(true);
             io.disconnect();
           }
