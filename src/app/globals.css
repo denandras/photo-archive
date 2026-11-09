@@ -27,7 +27,11 @@ body {
 
 /* ===== Horizontal marquee viewport ===== */
 .scroll-viewport {
-  overflow: hidden;
+  /* Horizontal clip only: the hover-pop (scale 1.2) must stay visible above
+     and below the row — `clip` clips one axis while the other stays visible
+     (plain `hidden` would force the other axis to auto and clip the pop). */
+  overflow-x: clip;
+  overflow-y: visible;
   /* Tiny inter-row spacing, matching the 14px intra-row image gap */
   padding: 4px 0;
   margin-bottom: 6px;
@@ -259,14 +263,25 @@ body {
   display: grid;
   grid-template-rows: 1fr;
   transition: grid-template-rows 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  /* let the hover-pop escape above/below; only collapsed rows mask */
+  overflow-y: visible;
+  overflow-x: clip;
 }
 
 .year-section.collapsed .year-content {
   grid-template-rows: 0fr;
+  overflow-y: hidden;
 }
 
 .year-content-inner {
-  overflow: hidden;
+  /* Vertical: visible so the hover-pop (scaled card) can rise above/below the
+     row — transform overflow was being cut by this mask. Horizontal: clip. */
+  overflow-y: visible;
+  overflow-x: clip;
+}
+/* The grid 0fr↔1fr collapse trick still needs the vertical mask while collapsed */
+.year-section.collapsed .year-content-inner {
+  overflow-y: hidden;
 }
 
 /* Skip rendering off-screen year sections — major perf win */
