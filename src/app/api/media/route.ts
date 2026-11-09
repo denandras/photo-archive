@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const S3_CONFIG = {
   endpoint: process.env.S4_ENDPOINT || "https://s3.tb1.denandras.cloud",
@@ -44,24 +45,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Presigned redirect: the browser pulls the bytes straight from the origin,
+  // so nothing transits Vercel except this tiny signed URL. The origin's
+  // response is authoritative — thumbs carry immutable caching set at upload,
+  // and the presign pins the same cache policy for originals.
   try {
     const command = new GetObjectCommand({
       Bucket: "tb1",
       Key: `media/${key}`,
+      ResponseCacheControl: "public, max-age=31536000, immutable",
     });
-
-    const response = await s3Client.send(command);
-    const body = await response.Body?.transformToByteArray();
-
-    if (!body) {
-      return NextResponse.json({ error: "Empty body" }, { status: 404 });
-    }
-
-    return new NextResponse(body as any, {
+    const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    return new NextResponse(null, {
+      status: 307,
       headers: {
-        "Content-Type": response.ContentType || "image/jpeg",
-        // s-maxage lets the Vercel edge cache serve repeats without touching S3
-        "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable",
+        Location: url,
+        // brief browser cache of the redirect itself; the signature outlives it
+        "Cache-Control": "private, max-age=300",
       },
     });
   } catch (e: any) {
