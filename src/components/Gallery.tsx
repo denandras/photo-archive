@@ -222,6 +222,7 @@ function ScrollRow({
      the rows' overflow clips defeat IO margins entirely). Keyed by index
      within one copy; every replica uses the same mapping. */
   const spansRef = useRef<{ l: number; r: number }[] | null>(null); // first-copy card spans
+  const baseShiftRef = useRef(0); // left base offset covering the left load band
   const inRangeRef = useRef<Set<number>>(new Set());
   const [inRange, setInRangeState] = useState<Set<number>>(new Set());
   // setState only when the set actually changes (rAF loop calls every frame)
@@ -249,7 +250,7 @@ function ScrollRow({
     let half = halfRef.current;
     if (half <= 0) {
       half = measureHalf();
-      if (half <= 0) return; // not measurable yet (collapsed/off-screen)
+      if (half <= 100) return; // not measurable / collapsed / mid-init layout
       halfRef.current = half;
     }
     // Always keep pos in [0..half) — seamless in both directions
@@ -291,19 +292,38 @@ function ScrollRow({
         const spans = spansRef.current;
         if (spans && spans.length > 0) {
           const vw = viewport.clientWidth;
+          // True infinity (b33): the DOM copies must ALWAYS cover the whole
+          // load band on BOTH sides of the window, at every p in [0, half).
+          // Base-shift B pushes the strip one margin-width left, so territory
+          // exists to the left of layout-0 and dragging backward always has
+          // something to reveal. Copies needed = (vw + 2M + B) / half + 1.
+          const B = Math.ceil(LOAD_MARGIN / half) * half;
+          const needed = Math.min(
+            12, // hard cap: a wild copy measurement must never explode the DOM
+            Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
+          );
+          // bidirectional: a bad early measure must not freeze the count
+          if (needed !== repsRef.current) {
+            repsRef.current = needed;
+            setReps(needed);
+          }
+          baseShiftRef.current = B;
+          track.style.transform = `translate3d(${-(p + B)}px, 0, 0)`;
           const next = new Set<number>();
           for (let c = 0; c < repsRef.current; c++) {
             const cOff = c * half;
             for (let i = 0; i < spans.length; i++) {
-              const l = spans[i].l + cOff - p;
-              const r = spans[i].r + cOff - p;
+              const l = spans[i].l + cOff - p - B;
+              const r = spans[i].r + cOff - p - B;
               if (r > -LOAD_MARGIN && l < vw + LOAD_MARGIN) next.add(i);
             }
           }
           setInRange(next);
+          return;
         }
       }
     }
+    track.style.transform = `translate3d(${-p}px, 0, 0)`;
   }, [measureHalf, setInRange]);
 
   // Marquee loop via rAF + transform (compositor-friendly, works on iOS)
@@ -323,10 +343,16 @@ function ScrollRow({
         const viewport = viewportRef.current;
         if (track && viewport) {
           const half = measureHalf();
-          if (half > 0) {
+          if (half > 0 && half > 100) {
             const vw = viewport.clientWidth;
-            const needed = Math.max(3, Math.ceil(vw / half) + 1);
-            if (needed > repsRef.current) {
+            // Same coverage formula as the eager path in render(): viewport +
+            // the load band on both sides + the left base shift
+            const B = Math.ceil(LOAD_MARGIN / half) * half;
+            const needed = Math.min(
+              12,
+              Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
+            );
+            if (needed !== repsRef.current) {
               repsRef.current = needed;
               setReps(needed);
             }

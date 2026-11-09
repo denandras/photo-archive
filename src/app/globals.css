@@ -27,6 +27,10 @@ body {
 
 /* ===== Horizontal marquee viewport ===== */
 .scroll-viewport {
+  /* b33: own the row width — width:auto sized the viewport to its
+     max-content track (99k px for long strips), which poisoned every
+     viewport-width computation and kept the row ever-growing. */
+  width: 100%;
   /* Horizontal clip only: the hover-pop (scale 1.2) must stay visible above
      and below the row — `clip` clips one axis while the other stays visible
      (plain `hidden` would force the other axis to auto and clip the pop). */
@@ -281,6 +285,10 @@ body {
 .year-content {
   display: grid;
   grid-template-rows: 1fr;
+  /* b33: bound the column — an `auto` column grew to the marquee track's
+     max-content (99k px per long strip), inflating the viewport and every
+     viewport-width computation. minmax(0,1fr) pins it to the section width. */
+  grid-template-columns: minmax(0, 1fr);
   transition: grid-template-rows 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   /* let the hover-pop escape above/below; only collapsed rows mask */
   overflow-y: visible;
