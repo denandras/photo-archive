@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "András Dénes — photo archive",
-  description: "photo archive / Fuji X100V",
+  title: "photo archive — András Dénes",
+  description: "Photo galleries of András Dénes — trombonist.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
