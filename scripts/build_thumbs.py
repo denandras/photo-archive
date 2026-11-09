@@ -23,8 +23,8 @@ Image.MAX_IMAGE_PIXELS = None
 from whitelist import (load_whitelist_text, parse_whitelist, is_whitelisted,
                        is_private, get_s3_client)
 
-THUMB_LONG_SIDE = 800
-THUMB_QUALITY = 80
+THUMB_LONG_SIDE = 640
+THUMB_QUALITY = 72
 SCAN_PREFIX = "media/kepek/Saját képek/"
 THUMB_PREFIX = "media/thumbs/"
 WHITELIST_KEY = SCAN_PREFIX + "public-list.txt"

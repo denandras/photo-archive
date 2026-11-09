@@ -45,8 +45,10 @@ function PhotoCard({
           }
         }
       },
-      // Load a full viewport-width ahead of the strip on both sides
-      { rootMargin: "0px 4000px 0px 4000px" }
+      // Load ~1200px ahead on both sides: visible-first, then the stream
+      // ahead (4000px made the first screenful compete with 40 queued thumbs
+      // — on a phone the visible strip completed in visible left→right waves)
+      { rootMargin: "0px 1200px 0px 1200px" }
     );
     io.observe(el);
     return () => io.disconnect();
