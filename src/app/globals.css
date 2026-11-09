@@ -99,15 +99,44 @@ body {
   }
 }
 
+/* ===== Load-in: image uncrops from a center point; corners ride the edges ===== */
+.photo-card img {
+  clip-path: inset(49.6% 49.6% 49.6% 49.6%);
+  opacity: 0;
+  transition: clip-path 0.75s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.45s ease 0.08s;
+  will-change: clip-path;
+}
+.photo-card.loaded img {
+  clip-path: inset(0 0 0 0);
+  opacity: 1;
+}
+
 /* ===== Architectural corner markers (L-shaped) ===== */
 .corner {
   position: absolute;
   width: 12px;
   height: 12px;
   pointer-events: none;
-  transition: opacity 0.3s ease, width 0.3s ease, height 0.3s ease;
+  transition: opacity 0.3s ease, width 0.3s ease, height 0.3s ease,
+              top 0.75s cubic-bezier(0.16, 1, 0.3, 1),
+              left 0.75s cubic-bezier(0.16, 1, 0.3, 1),
+              right 0.75s cubic-bezier(0.16, 1, 0.3, 1),
+              bottom 0.75s cubic-bezier(0.16, 1, 0.3, 1);
   opacity: 0.4;
   z-index: 2;
+}
+
+/* Not loaded yet: corners converged on the image's center point (they ride
+   the expanding frame out to their edges together with the clip reveal). */
+.photo-card:not(.loaded) .corner.tl { top: calc(50% - 6px); left: calc(50% - 6px); }
+.photo-card:not(.loaded) .corner.tr { top: calc(50% - 6px); right: calc(50% - 6px); }
+.photo-card:not(.loaded) .corner.bl { bottom: calc(50% - 6px); left: calc(50% - 6px); }
+.photo-card:not(.loaded) .corner.br { bottom: calc(50% - 6px); right: calc(50% - 6px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .photo-card .corner,
+  .photo-card img { transition: none; }
 }
 
 @media (hover: hover) {
@@ -335,11 +364,38 @@ header, footer, .year-header {
   height: 22px;
   pointer-events: none;
   z-index: 30;
+  transition: opacity 0.3s ease,
+              top 0.85s cubic-bezier(0.16, 1, 0.3, 1),
+              left 0.85s cubic-bezier(0.16, 1, 0.3, 1),
+              right 0.85s cubic-bezier(0.16, 1, 0.3, 1),
+              bottom 0.85s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .lightbox-stage .corner.lt-tl { top: 8px; left: 8px; border-top: 2px solid rgba(255,255,255,0.85); border-left: 2px solid rgba(255,255,255,0.85); }
 .lightbox-stage .corner.lt-tr { top: 8px; right: 8px; border-top: 2px solid rgba(255,255,255,0.85); border-right: 2px solid rgba(255,255,255,0.85); }
 .lightbox-stage .corner.lt-bl { bottom: 8px; left: 8px; border-bottom: 2px solid rgba(255,255,255,0.85); border-left: 2px solid rgba(255,255,255,0.85); }
 .lightbox-stage .corner.lt-br { bottom: 8px; right: 8px; border-bottom: 2px solid rgba(255,255,255,0.85); border-right: 2px solid rgba(255,255,255,0.85); }
+
+/* Until the big image loads: image clipped to a center point, corners
+   converged there, then everything expands together (cards do the same). */
+.lightbox-stage .lightbox-img {
+  clip-path: inset(49.6% 49.6% 49.6% 49.6%);
+  opacity: 0;
+  transition: clip-path 0.85s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.5s ease 0.08s;
+  will-change: clip-path;
+}
+.lightbox-stage.loaded .lightbox-img {
+  clip-path: inset(0 0 0 0);
+  opacity: 1;
+}
+.lightbox-stage:not(.loaded) .corner.lt-tl { top: calc(50% - 11px); left: calc(50% - 11px); }
+.lightbox-stage:not(.loaded) .corner.lt-tr { top: calc(50% - 11px); right: calc(50% - 11px); }
+.lightbox-stage:not(.loaded) .corner.lt-bl { bottom: calc(50% - 11px); left: calc(50% - 11px); }
+.lightbox-stage:not(.loaded) .corner.lt-br { bottom: calc(50% - 11px); right: calc(50% - 11px); }
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-stage .corner,
+  .lightbox-stage .lightbox-img { transition: none; }
+}
 
 .lightbox-close {
   position: absolute;

@@ -16,9 +16,15 @@ function PhotoCard({
   dataIdx: number;
   onClick: () => void;
 }) {
+  const [loaded, setLoaded] = useState(false);
+  // Double rAF: guarantee the not-loaded state (cropped-to-point image,
+  // corners converged in the middle) paints once before the expansion runs.
+  const flip = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => setLoaded(true)));
+  }, []);
   return (
     <div
-      className="photo-card"
+      className={`photo-card${loaded ? " loaded" : ""}`}
       data-photo-idx={dataIdx}
       style={{ aspectRatio: `${photo.w} / ${photo.h}` }}
       onClick={onClick}
@@ -32,11 +38,49 @@ function PhotoCard({
         height={photo.h}
         loading="lazy"
         draggable={false}
+        onLoad={flip}
+        ref={(el) => {
+          if (el && el.complete && el.naturalWidth > 0) flip();
+        }}
       />
       <span className="corner tl" />
       <span className="corner tr" />
       <span className="corner bl" />
       <span className="corner br" />
+    </div>
+  );
+}
+
+/* Lightbox stage: big image + corners uncrop together, exactly like the cards */
+function LightboxStage({ photo }: { photo: Photo }) {
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => setLoaded(false), [photo.src]);
+  const flip = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => setLoaded(true)));
+  }, []);
+  return (
+    <div
+      className={`lightbox-stage${loaded ? " loaded" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={photo.full}
+        alt=""
+        className="lightbox-img"
+        width={photo.w || undefined}
+        height={photo.h || undefined}
+        draggable={false}
+        onLoad={flip}
+        ref={(el) => {
+          if (el && el.complete && el.naturalWidth > 0) flip();
+        }}
+      />
+      <span className="corner lt-tl" />
+      <span className="corner lt-tr" />
+      <span className="corner lt-bl" />
+      <span className="corner lt-br" />
     </div>
   );
 }
@@ -421,23 +465,7 @@ export default function Gallery({
             {/* Safe-viewport box: sits between the iOS browser bars, which
                 overlap plain fixed/vh sizes — top AND bottom were cut. */}
             <div className="lightbox-fit">
-              <div
-                className="lightbox-stage"
-                onClick={(e) => e.stopPropagation()}
-                onContextMenu={(e) => e.preventDefault()}
-              >
-                <img
-                  src={lightbox.photos[lightbox.index].full}
-                  alt=""
-                  className="lightbox-img"
-                  draggable={false}
-                />
-                {/* Corner markers over the preview — screenshot deterrence */}
-                <span className="corner lt-tl" />
-                <span className="corner lt-tr" />
-                <span className="corner lt-bl" />
-                <span className="corner lt-br" />
-              </div>
+              <LightboxStage photo={lightbox.photos[lightbox.index]} />
               {lightbox.photos.length > 1 && (
                 <>
                   <span className="lightbox-counter">
