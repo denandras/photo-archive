@@ -47,3 +47,5 @@ scripts/.manifest_cache.json
 data/
 __pycache__/
 scripts/public/
+scripts/.thumbs_cache.json
+scripts/.manifest_cache.json
