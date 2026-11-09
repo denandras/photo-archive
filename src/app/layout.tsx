@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "photo archive — András Dénes",
+  title: "photo archive",
   description: "Photo galleries of András Dénes — trombonist.",
 };
 
