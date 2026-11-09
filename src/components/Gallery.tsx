@@ -473,6 +473,11 @@ export default function Gallery({
     };
   }, [lightbox]);
 
+  // Mobile: a discrete horizontal flick acts exactly like an arrow key —
+  // one step per gesture, no continuous drag/scroll mechanic (b22). The
+  // gesture starts on the lightbox layer only; a vertical flick does nothing.
+  const touchStart = useRef<{ x: number; y: number; t: number } | null>(null);
+
   // Shareable URL stays in sync as the user browses the lightbox
   useEffect(() => {
     if (!mounted) return;
@@ -504,6 +509,31 @@ export default function Gallery({
             className="lightbox"
             onClick={() => setLightbox(null)}
             onContextMenu={(e) => e.preventDefault()}
+            onTouchStart={(e) => {
+              const t = e.touches[0];
+              touchStart.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+            }}
+            onTouchEnd={(e) => {
+              const s = touchStart.current;
+              touchStart.current = null;
+              if (!s) return;
+              const t = e.changedTouches[0];
+              const dx = t.clientX - s.x;
+              const dy = t.clientY - s.y;
+              // Discrete flick: mostly horizontal, real distance, quick. One
+              // gesture = one arrow-key step — no drag tracking in between.
+              if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+              if (Date.now() - s.t > 700) return;
+              e.stopPropagation();
+              setLightbox((p) => {
+                if (!p) return p;
+                if (dx < 0)
+                  return p.index < p.photos.length - 1
+                    ? { ...p, index: p.index + 1 }
+                    : p;
+                return p.index > 0 ? { ...p, index: p.index - 1 } : p;
+              });
+            }}
           >
             {/* Safe-viewport box: sits between the iOS browser bars, which
                 overlap plain fixed/vh sizes — top AND bottom were cut. */}
