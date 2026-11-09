@@ -17,13 +17,44 @@ function PhotoCard({
   onClick: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
+  const [active, setActive] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
   // Double rAF: guarantee the not-loaded state (cropped-to-point image,
   // corners converged in the middle) paints once before the expansion runs.
   const flip = useCallback(() => {
     requestAnimationFrame(() => requestAnimationFrame(() => setLoaded(true)));
   }, []);
+
+  // Native loading="lazy" measures layout distance and ignores the
+  // transform marquee: mirrored rows show their strip far from the DOM
+  // origin, so those images never qualified and the rows looked empty on
+  // the right. IO is transform-aware — gate the src on it instead.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    if (!("IntersectionObserver" in window)) {
+      setActive(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            setActive(true);
+            io.disconnect();
+          }
+        }
+      },
+      // Load a full viewport-width ahead of the strip on both sides
+      { rootMargin: "0px 4000px 0px 4000px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   return (
     <div
+      ref={cardRef}
       className={`photo-card${loaded ? " loaded" : ""}`}
       data-photo-idx={dataIdx}
       style={{ aspectRatio: `${photo.w} / ${photo.h}` }}
@@ -32,16 +63,12 @@ function PhotoCard({
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={photo.src}
+        src={active ? photo.src : undefined}
         alt=""
         width={photo.w}
         height={photo.h}
-        loading="lazy"
         draggable={false}
         onLoad={flip}
-        ref={(el) => {
-          if (el && el.complete && el.naturalWidth > 0) flip();
-        }}
       />
       <span className="corner tl" />
       <span className="corner tr" />
