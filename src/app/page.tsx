@@ -34,7 +34,7 @@ export default async function Page() {
             const ext = p.key.split(".").pop()?.toLowerCase() || "";
             // HEIC originals are not browser-renderable — serve the JPEG rendition
             const fullKey = ext === "heic" || ext === "heif"
-              ? `${p.key}.jpg`
+              ? `fulls/${p.key}.jpg`
               : p.key;
             return {
               src: `/api/media?key=${encodeURIComponent("thumbs/" + p.key)}`,
