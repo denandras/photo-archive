@@ -125,6 +125,15 @@ body {
   opacity: 1;
 }
 
+/* Already loaded (cache/preload): no choreography — the image simply appears.
+   The rushed mid-speed animation felt wrong for already-present photos. */
+.photo-card.instant img {
+  transition: none;
+  clip-path: inset(0 0 0 0);
+}
+.photo-card.instant .corner {
+  transition: none;
+}
 /* ===== Architectural corner markers (L-shaped) ===== */
 .corner {
   position: absolute;

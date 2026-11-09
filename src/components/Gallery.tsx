@@ -23,11 +23,17 @@ function PhotoCard({
   // "Loaded" is a direct DOM class, NOT React state: dozens of thumbs finish
   // around the same time while the marquee runs — a setState per image
   // re-renders on the main thread and the rows visibly froze mid-scroll (b20).
+  // Already-complete thumbnails (cache/preload) skip the choreography (b22):
+  // the rushed-looking fast animation reads wrong for the calm feel.
   const flip = useCallback(() => {
     const el = cardRef.current;
     if (!el) return;
     requestAnimationFrame(() =>
-      requestAnimationFrame(() => el.classList.add("loaded"))
+      requestAnimationFrame(() => {
+        const img = el.querySelector("img");
+        if (img?.complete) el.classList.add("instant");
+        el.classList.add("loaded");
+      })
     );
   }, []);
 
