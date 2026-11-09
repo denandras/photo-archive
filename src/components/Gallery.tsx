@@ -96,7 +96,6 @@ function PhotoCard({
 
 /* Lightbox stage: big image + corners uncrop together, exactly like the cards */
 function LightboxStage({ photo }: { photo: Photo }) {
-  const [loaded, setLoaded] = useState(false);
   // b25: photo changes play the choreography in reverse at normal speed —
   // the old image closes back to its center point, then the new one expands.
   const [current, setCurrent] = useState(photo);
