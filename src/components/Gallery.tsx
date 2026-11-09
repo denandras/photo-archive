@@ -57,6 +57,7 @@ function ScrollRow({
   const dragMoved = useRef(false);
   const lastX = useRef(0);
   const startX = useRef(0);
+  const initPhase = useRef(false); // start-phase applied once (mirrored rows)
   const posRef = useRef(0); // px offset into the first copy [0..half)
   const halfRef = useRef(0); // cached copy (period) width
   const repsRef = useRef(3); // current copy count (must reach setReps when grown)
@@ -89,6 +90,18 @@ function ScrollRow({
     // Always keep pos in [0..half) — seamless in both directions
     let p = posRef.current % half;
     if (p < 0) p += half;
+    if (!initPhase.current) {
+      // Mirrored start: left-streaming rows begin with the strip's start just
+      // off the right edge, so photos stream right-to-left ("begin from the
+      // right, load to the left"); right-streaming rows start at the left edge.
+      initPhase.current = true;
+      if (direction === "left") {
+        const viewport = viewportRef.current;
+        const vw = viewport ? viewport.clientWidth : 0;
+        p = ((half - vw) % half + half) % half;
+        posRef.current = p;
+      }
+    }
     posRef.current = p;
     // GPU transform marquee — bypasses iOS Safari's compositor-owned scrollLeft
     track.style.transform = `translate3d(${-p}px, 0, 0)`;
@@ -271,7 +284,7 @@ function YearSection({
             <ScrollRow
               key={day}
               photos={photos}
-              direction={i % 2 === 0 ? "left" : "right"}
+              direction={i % 2 === 0 ? "right" : "left"}
               onPhotoClick={onPhotoClick}
             />
           ))}
