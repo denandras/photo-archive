@@ -6,22 +6,24 @@ import { createPortal } from "react-dom";
 type Photo = { src: string; full: string; key: string; w: number; h: number };
 
 const DRAG_THRESHOLD = 6;
-
-/* Photos whose thumb is known fetched (any replica instance) — a sibling
-   instance mounts/enters instantly loaded instead of re-IO-gating (b27):
-   entering cards used to render blank for a beat while their own IO fired. */
-const seenThumbKeys = new Set<string>();
+/* Horizontal look-ahead per side, in px — must cover a full drag-flick in
+   BOTH directions: the auto-stream only pre-fills forward, a backward drag
+   reveals territory it never visited (b31). */
+const LOAD_MARGIN = 2000;
+/* Vertical band: rows compute their in-range cards only near the viewport */
+const V_BAND = 900;
 
 function PhotoCard({
   photo,
   dataIdx,
+  active,
   onClick,
 }: {
   photo: Photo;
   dataIdx: number;
+  active: boolean;
   onClick: () => void;
 }) {
-  const [active, setActive] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   // Double rAF: guarantee the not-loaded state (cropped-to-point image,
   // corners converged in the middle) paints once before the expansion runs.
@@ -42,41 +44,13 @@ function PhotoCard({
     );
   }, []);
 
-  // Native loading="lazy" measures layout distance and ignores the
-  // transform marquee: mirrored rows show their strip far from the DOM
-  // origin, so those images never qualified and the rows looked empty on
-  // the right. IO is transform-aware — gate the src on it instead.
-  useEffect(() => {
-    const el = cardRef.current;
-    if (!el) return;
-    if (!("IntersectionObserver" in window)) {
-      setActive(true);
-      return;
-    }
-    // Any sibling instance already fetched this thumb: load instantly, no IO
-    if (seenThumbKeys.has(photo.key)) {
-      setActive(true);
-      return;
-    }
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) {
-            seenThumbKeys.add(photo.key);
-            setActive(true);
-            io.disconnect();
-          }
-        }
-      },
-      // Load ~1200px ahead horizontally, ~800px vertically: after a fast
-      // swipe lands on a new row its thumbs should already be in flight;
-      // zero vertical margin made freshly-revealed rows render as empty
-      // strips (b25).
-      { rootMargin: "800px 1200px 800px 1200px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
+  // b31: `active` (src on/off) is DERIVED FROM THE MARQUEE MATH by ScrollRow —
+  // IntersectionObserver here was a dead end: the rows' clipping ancestors
+  // (overflow-x clip, needed for the hover-pop) clip cards geometrically and
+  // IO intersects against ancestor clips BEFORE rootMargin applies — margins
+  // silently did nothing (proved: fresh IO with 2000px margin ≡ 0px).
+  // We are the transform source, so we know each card's layout span and the
+  // live offset — direction-symmetric by construction.
 
   return (
     <div
@@ -244,6 +218,19 @@ function ScrollRow({
   const velSamples = useRef<number[]>([]);
   const speedRef = useRef(direction === "left" ? 0.35 : -0.35);
   const [reps, setReps] = useState(3); // copies rendered; grows to cover the viewport
+  /* b31: in-range photo indices, computed from the marquee math (NOT IO —
+     the rows' overflow clips defeat IO margins entirely). Keyed by index
+     within one copy; every replica uses the same mapping. */
+  const spansRef = useRef<{ l: number; r: number }[] | null>(null); // first-copy card spans
+  const inRangeRef = useRef<Set<number>>(new Set());
+  const [inRange, setInRangeState] = useState<Set<number>>(new Set());
+  // setState only when the set actually changes (rAF loop calls every frame)
+  const setInRange = useCallback((next: Set<number>) => {
+    const prev = inRangeRef.current;
+    if (prev.size === next.size && [...next].every((x) => prev.has(x))) return;
+    inRangeRef.current = next;
+    setInRangeState(next);
+  }, []);
 
   // One period = one copy's width (its box includes the trailing 14px pad, so
   // copies tile seamlessly with the same gap as inside a copy). 0 while the
@@ -283,7 +270,41 @@ function ScrollRow({
     posRef.current = p;
     // GPU transform marquee — bypasses iOS Safari's compositor-owned scrollLeft
     track.style.transform = `translate3d(${-p}px, 0, 0)`;
-  }, [measureHalf]);
+
+    // b31: derive which cards are in load range from the marquee math —
+    // direction-symmetric, clip-proof (IO margins are defeated by the rows'
+    // overflow clipping, so IO can't do this job at all).
+    const viewport = viewportRef.current;
+    if (viewport) {
+      const rc = viewport.getBoundingClientRect();
+      if (rc.bottom > -V_BAND && rc.top < innerHeight + V_BAND) {
+        if (!spansRef.current) {
+          const copy = track.firstElementChild;
+          if (copy) {
+            spansRef.current = [...copy.children].map((c) => {
+              const el = c as HTMLElement;
+              const l = el.offsetLeft; // layout space — transform-proof
+              return { l, r: l + el.offsetWidth };
+            });
+          }
+        }
+        const spans = spansRef.current;
+        if (spans && spans.length > 0) {
+          const vw = viewport.clientWidth;
+          const next = new Set<number>();
+          for (let c = 0; c < repsRef.current; c++) {
+            const cOff = c * half;
+            for (let i = 0; i < spans.length; i++) {
+              const l = spans[i].l + cOff - p;
+              const r = spans[i].r + cOff - p;
+              if (r > -LOAD_MARGIN && l < vw + LOAD_MARGIN) next.add(i);
+            }
+          }
+          setInRange(next);
+        }
+      }
+    }
+  }, [measureHalf, setInRange]);
 
   // Marquee loop via rAF + transform (compositor-friendly, works on iOS)
   useEffect(() => {
@@ -297,6 +318,7 @@ function ScrollRow({
       if (++repsCheck.current >= 120 && !isDragging.current) {
         repsCheck.current = 0;
         halfRef.current = 0; // re-measure (images may have resized copies)
+        spansRef.current = null;
         const track = trackRef.current;
         const viewport = viewportRef.current;
         if (track && viewport) {
@@ -325,7 +347,7 @@ function ScrollRow({
       rafRef.current = requestAnimationFrame(animate);
     };
     rafRef.current = requestAnimationFrame(animate);
-    const onResize = () => { halfRef.current = 0; };
+    const onResize = () => { halfRef.current = 0; spansRef.current = null; };
     window.addEventListener("resize", onResize);
     return () => {
       cancelAnimationFrame(rafRef.current);
@@ -423,7 +445,13 @@ function ScrollRow({
         {copies.map((c) => (
           <div className="scroll-copy" key={c} aria-hidden={c > 0}>
             {photos.map((p, i) => (
-              <PhotoCard key={i} photo={p} dataIdx={i} onClick={() => handleCardClick(i % photos.length)} />
+              <PhotoCard
+                key={i}
+                photo={p}
+                dataIdx={i}
+                active={inRange.has(i)}
+                onClick={() => handleCardClick(i % photos.length)}
+              />
             ))}
           </div>
         ))}
