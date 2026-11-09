@@ -3,7 +3,13 @@ import Gallery from "@/components/Gallery";
 import { SiteHeader } from "@/components/Header";
 import { SiteFooter } from "@/components/Footer";
 
-type GalleryPhoto = { src: string; w: number; h: number };
+type GalleryPhoto = {
+  src: string; // thumbnail (small, fast)
+  full: string; // original (lightbox only)
+  key: string; // S3 key relative to media/ — permalink identity
+  w: number;
+  h: number;
+};
 
 // Only show formats browsers can render natively (HEIC excluded)
 const BROWSER_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "avif"]);
@@ -22,7 +28,9 @@ export default async function Page() {
             return BROWSER_EXTS.has(ext);
           })
           .map((p) => ({
-            src: `/api/media?key=${encodeURIComponent(p.key)}`,
+            src: `/api/media?key=${encodeURIComponent("thumbs/" + p.key)}`,
+            full: `/api/media?key=${encodeURIComponent(p.key)}`,
+            key: p.key,
             w: p.width || 600,
             h: p.height || 400,
           }));

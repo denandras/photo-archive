@@ -283,26 +283,31 @@ header, footer, .year-header {
 /* ===== Lightbox ===== */
 .lightbox {
   position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.95);
+  outline: none;
+}
+
+/* Content box sized to the SAFE viewport (svh = browsers bars always shown).
+   iOS overlays plain fixed/vh content with its top+bottom bars (worst at page
+   top); svh never extends past them, so nothing gets cut in either state. */
+.lightbox-fit {
+  position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  /* dvh: iOS Safari's browser bars overlap fixed content sized with plain vh
-     (they show at page top), hiding the bottom of the lightbox. The dynamic
-     viewport shrinks when the bars are visible, so nothing sits underneath. */
   height: 100vh;
-  height: 100dvh;
-  z-index: 1000;
-  background: rgba(0, 0, 0, 0.95);
+  height: 100svh;
   display: flex;
   align-items: center;
   justify-content: center;
-  outline: none;
 }
 
 .lightbox-img {
   max-width: 94vw;
   max-height: 88vh;
-  max-height: 88dvh;
+  max-height: 88svh;
   object-fit: contain;
   user-select: none;
   -webkit-user-select: none;
@@ -316,7 +321,7 @@ header, footer, .year-header {
   display: inline-block; /* shrink-wraps the img so corners sit on image, not viewport */
   max-width: 94vw;
   max-height: 88vh;
-  max-height: 88dvh;
+  max-height: 88svh;
 }
 /* The img keeps its sizing; stage size follows it */
 .lightbox-stage .lightbox-img {

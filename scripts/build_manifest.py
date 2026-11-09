@@ -15,6 +15,7 @@ Usage: python3 build_manifest.py [N]   # N = scan first N files (test mode)
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -125,19 +126,25 @@ def main():
           f"{priv_n} .p-private excluded")
 
     manifest = {"years": {}}
-    fetched = reused = public_n = untagged = 0
+    fetched = reused = public_n = untagged = pathdated = 0
 
     for i, obj in enumerate(images):
         ckey = f"{obj['key']}|{obj['size']}|{obj['etag']}"
-        if ckey in cache:
-            rec = cache[ckey]
+        rec = cache.get(ckey)
+        if rec and (rec.get("dt") or rec.get("attempts", 0) >= 3):
             reused += 1
         else:
+            # Transient S3/exiftool failures (e.g. right after a rename) must
+            # not poison the cache forever: retry no-date records a few times.
             try:
                 rec = probe(s3, obj["key"])
             except Exception as e:
                 print(f"  skip {obj['key']}: {e}")
                 rec = {"dt": None, "keywords": [], "width": None, "height": None}
+            if not rec.get("dt"):
+                rec["attempts"] = (rec.get("attempts") or (cache.get(ckey) or {}).get("attempts", 0) or 0) + 1
+            else:
+                rec.pop("attempts", None)
             cache[ckey] = rec
             fetched += 1
             if fetched % 25 == 0:
@@ -146,6 +153,17 @@ def main():
                 with open(CACHE_FILE, "w") as f:
                     json.dump(cache, f)
 
+        # EXIF may be absent (e.g. Panasonic JPEGs without any date tag);
+        # folders in this bucket are date-prefixed -> fall back to that.
+        if not rec.get("dt"):
+            m = re.search(r"\d{4}-\d{2}-\d{2}", obj["key"][len(SCAN_PREFIX):])
+            if m:
+                try:
+                    rec = {**rec, "dt": datetime.strptime(m.group(0), "%Y-%m-%d").strftime("%Y:%m:%d 00:00:00")}
+                    cache[ckey] = rec
+                    pathdated += 1
+                except ValueError:
+                    pass
         if not rec.get("dt"):
             untagged += 1
             continue
@@ -174,7 +192,7 @@ def main():
     with open(CACHE_FILE, "w") as f:
         json.dump(cache, f)
     print(f"Fetched {fetched} new / reused {reused} cached | {untagged} untagged | "
-          f"manifest: {len(manifest['years'])} yr(s), {public_n} public photos.")
+          f"{pathdated} folder-dated | manifest: {len(manifest['years'])} yr(s), {public_n} public photos.")
 
 
 if __name__ == "__main__":

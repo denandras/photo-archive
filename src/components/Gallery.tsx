@@ -3,7 +3,7 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 
-type Photo = { src: string; w: number; h: number };
+type Photo = { src: string; full: string; key: string; w: number; h: number };
 
 const DRAG_THRESHOLD = 6;
 
@@ -44,11 +44,13 @@ function PhotoCard({
 function ScrollRow({
   photos,
   direction,
-  onPhotoClick,
+  day,
+  onOpen,
 }: {
   photos: Photo[];
   direction: "left" | "right";
-  onPhotoClick: (photos: Photo[], index: number) => void;
+  day: string;
+  onOpen: (index: number) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -205,15 +207,15 @@ function ScrollRow({
       const card = el?.closest("[data-photo-idx]") as HTMLElement | null;
       if (card) {
         const i = Number(card.getAttribute("data-photo-idx"));
-        if (!Number.isNaN(i) && photos.length > 0) onPhotoClick(photos, i % photos.length);
+        if (!Number.isNaN(i) && photos.length > 0) onOpen(i % photos.length);
       }
     }
-  }, [photos, onPhotoClick]);
+  }, [photos, onOpen]);
 
   const handleCardClick = useCallback((idx: number) => {
     if (dragMoved.current) return;
-    onPhotoClick(photos, idx);
-  }, [photos, onPhotoClick]);
+    onOpen(idx);
+  }, [onOpen]);
 
   // Copies of the same sequence; count grows (never shrinks) so the track
   // always covers viewport + one period — a drag or the marquee can never
@@ -234,6 +236,7 @@ function ScrollRow({
     <div
       className="scroll-viewport"
       ref={viewportRef}
+      data-day={day}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -257,13 +260,33 @@ function YearSection({
   year,
   days,
   onPhotoClick,
+  anchorDay,
+  stayOpen,
 }: {
   year: string;
   days: Record<string, Photo[]>;
-  onPhotoClick: (photos: Photo[], index: number) => void;
+  onPhotoClick: (photos: Photo[], index: number, meta: { year: string; day: string }) => void;
+  anchorDay: string | null; // permalink ?d=: scroll this day row into view
+  stayOpen: boolean; // permalink ?y=: expand this year on load
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const dayEntries = Object.entries(days);
+
+  // Expand client-side only (SSR renders collapsed; hydration timing with
+  // window-dependent initial state is unreliable) — permalink ?y= expands.
+  useEffect(() => {
+    if (stayOpen) setCollapsed(false);
+  }, [stayOpen]);
+
+  // Permalink scroll: wait for a tick so the expanded content is laid out.
+  useEffect(() => {
+    if (!anchorDay) return;
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-day="${CSS.escape(anchorDay)}"]`);
+      el?.scrollIntoView({ block: "center" });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [anchorDay]);
 
   return (
     <section className={`year-section${collapsed ? " collapsed" : ""}`}>
@@ -285,7 +308,8 @@ function YearSection({
               key={day}
               photos={photos}
               direction={i % 2 === 0 ? "right" : "left"}
-              onPhotoClick={onPhotoClick}
+              day={day}
+              onOpen={(index) => onPhotoClick(photos, index, { year, day })}
             />
           ))}
         </div>
@@ -299,10 +323,48 @@ export default function Gallery({
 }: {
   data: Record<string, Record<string, Photo[]>>;
 }) {
-  const [lightbox, setLightbox] = useState<{ photos: Photo[]; index: number } | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    photos: Photo[];
+    index: number;
+    meta: { year: string; day: string };
+  } | null>(null);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
+
+  const openLightbox = useCallback(
+    (photos: Photo[], index: number, meta: { year: string; day: string }) => {
+      setLightbox({ photos, index, meta });
+    }, []
+  );
+
+  // Permalinks: ?y=YEAR[&d=YYYY-MM-DD[&i=filename.jpg]] preselect a year,
+  // a day row and/or open a photo's lightbox directly (shareable URLs).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const y = params.get("y");
+    const d = params.get("d");
+    const i = params.get("i");
+    if (!y || !data[y]) return;
+    if (!d) return;
+    const photos = data[y][d];
+    if (!photos || !i) return;
+    const idx = photos.findIndex((p) => p.key.split("/").pop() === i);
+    if (idx >= 0) setLightbox({ photos, index: idx, meta: { year: y, day: d } });
+  }, [data]);
+
+  const syncLightboxUrl = useCallback(
+    (lb: { photos: Photo[]; index: number; meta: { year: string; day: string } } | null) => {
+      const params = new URLSearchParams(window.location.search);
+      if (lb) {
+        params.set("y", lb.meta.year);
+        params.set("d", lb.meta.day);
+        params.set("i", lb.photos[lb.index]?.key.split("/").pop() || "");
+      } else {
+        params.delete("i");
+      }
+      history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+    }, []);
 
   // Keyboard nav + scroll lock when lightbox is open
   useEffect(() => {
@@ -324,7 +386,17 @@ export default function Gallery({
     };
   }, [lightbox]);
 
+  // Shareable URL stays in sync as the user browses the lightbox
+  useEffect(() => {
+    if (!mounted) return;
+    syncLightboxUrl(lightbox);
+  }, [lightbox, mounted, syncLightboxUrl]);
+
   const years = Object.entries(data).sort((a, b) => b[0].localeCompare(a[0]));
+  const params = new URLSearchParams(
+    typeof window === "undefined" ? "" : window.location.search
+  );
+  const linkY = params.get("y");
 
   return (
     <>
@@ -333,7 +405,9 @@ export default function Gallery({
           key={year}
           year={year}
           days={days}
-          onPhotoClick={(photos, index) => setLightbox({ photos, index })}
+          onPhotoClick={openLightbox}
+          anchorDay={linkY === year ? params.get("d") : null}
+          stayOpen={linkY === year}
         />
       ))}
 
@@ -344,64 +418,68 @@ export default function Gallery({
             onClick={() => setLightbox(null)}
             onContextMenu={(e) => e.preventDefault()}
           >
-            <div
-              className="lightbox-stage"
-              onClick={(e) => e.stopPropagation()}
-              onContextMenu={(e) => e.preventDefault()}
-            >
-              <img
-                src={lightbox.photos[lightbox.index].src}
-                alt=""
-                className="lightbox-img"
-                draggable={false}
-              />
-              {/* Corner markers over the preview — screenshot deterrence */}
-              <span className="corner lt-tl" />
-              <span className="corner lt-tr" />
-              <span className="corner lt-bl" />
-              <span className="corner lt-br" />
+            {/* Safe-viewport box: sits between the iOS browser bars, which
+                overlap plain fixed/vh sizes — top AND bottom were cut. */}
+            <div className="lightbox-fit">
+              <div
+                className="lightbox-stage"
+                onClick={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <img
+                  src={lightbox.photos[lightbox.index].full}
+                  alt=""
+                  className="lightbox-img"
+                  draggable={false}
+                />
+                {/* Corner markers over the preview — screenshot deterrence */}
+                <span className="corner lt-tl" />
+                <span className="corner lt-tr" />
+                <span className="corner lt-bl" />
+                <span className="corner lt-br" />
+              </div>
+              {lightbox.photos.length > 1 && (
+                <>
+                  <span className="lightbox-counter">
+                    {lightbox.index + 1} / {lightbox.photos.length}
+                  </span>
+                  {lightbox.index > 0 && (
+                    <button
+                      className="lightbox-nav lightbox-prev"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLightbox((p) => (p ? { ...p, index: p.index - 1 } : p));
+                      }}
+                      aria-label="Previous"
+                    >
+                      &#8249;
+                    </button>
+                  )}
+                  {lightbox.index < lightbox.photos.length - 1 && (
+                    <button
+                      className="lightbox-nav lightbox-next"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLightbox((p) => (p ? { ...p, index: p.index + 1 } : p));
+                      }}
+                      aria-label="Next"
+                    >
+                      &#8250;
+                    </button>
+                  )}
+                </>
+              )}
+              <button
+                className="lightbox-close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightbox(null);
+                }}
+                aria-label="Close"
+              >
+                &times;
+              </button>
             </div>
-            {lightbox.photos.length > 1 && (
-              <>
-                <span className="lightbox-counter">
-                  {lightbox.index + 1} / {lightbox.photos.length}
-                </span>
-                {lightbox.index > 0 && (
-                  <button
-                    className="lightbox-nav lightbox-prev"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setLightbox((p) => (p ? { ...p, index: p.index - 1 } : p));
-                    }}
-                    aria-label="Previous"
-                  >
-                    &#8249;
-                  </button>
-                )}
-                {lightbox.index < lightbox.photos.length - 1 && (
-                  <button
-                    className="lightbox-nav lightbox-next"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setLightbox((p) => (p ? { ...p, index: p.index + 1 } : p));
-                    }}
-                    aria-label="Next"
-                  >
-                    &#8250;
-                  </button>
-                )}
-              </>
-            )}
-            <button
-              className="lightbox-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                setLightbox(null);
-              }}
-              aria-label="Close"
-            >
-              &times;
-            </button>
           </div>,
           document.body,
         )}

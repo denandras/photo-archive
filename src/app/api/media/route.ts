@@ -60,7 +60,8 @@ export async function GET(request: NextRequest) {
     return new NextResponse(body as any, {
       headers: {
         "Content-Type": response.ContentType || "image/jpeg",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        // s-maxage lets the Vercel edge cache serve repeats without touching S3
+        "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable",
       },
     });
   } catch (e: any) {
