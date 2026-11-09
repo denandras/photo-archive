@@ -7,7 +7,7 @@ export function SiteHeader() {
       <div className="flex items-center gap-3 md:justify-center">
         <div className="h-px w-10 bg-white/40" />
         <p className="text-white/40 font-mono text-[11px] uppercase tracking-[0.2em]">
-          photo archive / Fuji X100V&nbsp;&nbsp;·&nbsp;&nbsp;b19
+          photo archive / Fuji X100V&nbsp;&nbsp;·&nbsp;&nbsp;b20
         </p>
       </div>
     </header>

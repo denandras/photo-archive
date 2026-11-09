@@ -16,13 +16,19 @@ function PhotoCard({
   dataIdx: number;
   onClick: () => void;
 }) {
-  const [loaded, setLoaded] = useState(false);
   const [active, setActive] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   // Double rAF: guarantee the not-loaded state (cropped-to-point image,
   // corners converged in the middle) paints once before the expansion runs.
+  // "Loaded" is a direct DOM class, NOT React state: dozens of thumbs finish
+  // around the same time while the marquee runs — a setState per image
+  // re-renders on the main thread and the rows visibly froze mid-scroll (b20).
   const flip = useCallback(() => {
-    requestAnimationFrame(() => requestAnimationFrame(() => setLoaded(true)));
+    const el = cardRef.current;
+    if (!el) return;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => el.classList.add("loaded"))
+    );
   }, []);
 
   // Native loading="lazy" measures layout distance and ignores the
@@ -57,7 +63,7 @@ function PhotoCard({
   return (
     <div
       ref={cardRef}
-      className={`photo-card${loaded ? " loaded" : ""}`}
+      className="photo-card"
       data-photo-idx={dataIdx}
       style={{ aspectRatio: `${photo.w} / ${photo.h}` }}
       onClick={onClick}
@@ -69,6 +75,7 @@ function PhotoCard({
         alt=""
         width={photo.w}
         height={photo.h}
+        decoding="async"
         draggable={false}
         onLoad={flip}
       />
@@ -100,6 +107,7 @@ function LightboxStage({ photo }: { photo: Photo }) {
         className="lightbox-img"
         width={photo.w || undefined}
         height={photo.h || undefined}
+        decoding="async"
         draggable={false}
         onLoad={flip}
         ref={(el) => {

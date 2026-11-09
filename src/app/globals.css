@@ -51,6 +51,8 @@ body {
   display: flex;
   /* Copies carry their own trailing pad (inter-copy gap == intra-copy gap) */
   width: max-content;
+  /* Persist the transform layer so image decodes never demote it (b20) */
+  /* (already declared below — kept single) */
   align-items: center;
   /* GPU-composited marquee (transform driven from JS) */
   will-change: transform;
