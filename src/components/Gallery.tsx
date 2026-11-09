@@ -97,7 +97,20 @@ function PhotoCard({
 /* Lightbox stage: big image + corners uncrop together, exactly like the cards */
 function LightboxStage({ photo }: { photo: Photo }) {
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => setLoaded(false), [photo.src]);
+  // b25: photo changes play the choreography in reverse at normal speed —
+  // the old image closes back to its center point, then the new one expands.
+  const [current, setCurrent] = useState(photo);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (photo.full === current.full) return;
+    // Close: dropping .loaded runs the transition backwards (old image stays
+    // mounted underneath until the swap).
+    setLoaded(false);
+    const t = window.setTimeout(() => setCurrent(photo), 780);
+    return () => clearTimeout(t);
+    // current.full omitted on purpose: only respond to the incoming prop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photo.full]);
   const flip = useCallback(() => {
     requestAnimationFrame(() => requestAnimationFrame(() => setLoaded(true)));
   }, []);
@@ -109,11 +122,11 @@ function LightboxStage({ photo }: { photo: Photo }) {
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={photo.full}
+        src={current.full}
         alt=""
         className="lightbox-img"
-        width={photo.w || undefined}
-        height={photo.h || undefined}
+        width={current.w || undefined}
+        height={current.h || undefined}
         decoding="async"
         draggable={false}
         onLoad={flip}
