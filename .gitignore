@@ -45,3 +45,5 @@ next-env.d.ts
 # app local state
 scripts/.manifest_cache.json
 data/
+__pycache__/
+scripts/public/
