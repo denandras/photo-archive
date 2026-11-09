@@ -15,6 +15,11 @@
 }
 
 html {
+  /* b35: iOS pull-to-refresh — a slight downward drag at the top of the page
+     silently reloaded the site from cache and every row snapped back to its
+     strip start ("it was all right, but it reset to a state"). No device-
+     detection logic exists in the site; the reload was Safari's. */
+  overscroll-behavior-y: none;
   scroll-behavior: auto;
 }
 

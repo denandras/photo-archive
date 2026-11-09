@@ -302,8 +302,10 @@ function ScrollRow({
             12, // hard cap: a wild copy measurement must never explode the DOM
             Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
           );
-          // bidirectional: a bad early measure must not freeze the count
-          if (needed !== repsRef.current) {
+          // grow-only (b35): bidirectional resizing let a jittery re-measure
+          // flap the copy count and read as a "reset" — growth is capped, so
+          // leaving stale extra copies is harmless
+          if (needed > repsRef.current) {
             repsRef.current = needed;
             setReps(needed);
           }
@@ -352,7 +354,8 @@ function ScrollRow({
               12,
               Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
             );
-            if (needed !== repsRef.current) {
+            // grow-only, mirrors the eager path (b35)
+            if (needed > repsRef.current) {
               repsRef.current = needed;
               setReps(needed);
             }
