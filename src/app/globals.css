@@ -367,6 +367,31 @@ header, footer, .year-header {
   justify-content: center;
 }
 
+/* ===== Lightbox preview stage (b29 v2): grid-stacked slots so the two
+   images can animate independently while the stage keeps its shrink-wrapped
+   sizing from the active slot. ===== */
+.lightbox-stage {
+  position: relative;
+  display: grid; /* slots stack in the same cell */
+  max-width: 94vw;
+  max-height: 88vh;
+  max-height: 88svh;
+}
+.lb-slot {
+  grid-area: 1 / 1;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* The incoming image expands ON TOP of the outgoing one */
+.lb-slot.lb-above { z-index: 2; }
+.lb-inner {
+  position: relative;
+  display: inline-block; /* shrink-wraps the img so corners sit on image */
+  max-width: 94vw;
+}
 .lightbox-img {
   max-width: 94vw;
   max-height: 88vh;
@@ -377,22 +402,10 @@ header, footer, .year-header {
   -webkit-touch-callout: none;
   pointer-events: none;
 }
-
-/* ===== Lightbox preview stage: corners hug the actual image ===== */
-.lightbox-stage {
-  position: relative;
-  display: inline-block; /* shrink-wraps the img so corners sit on image, not viewport */
-  max-width: 94vw;
-  max-height: 88vh;
-  max-height: 88svh;
-}
-/* The img keeps its sizing; stage size follows it */
-.lightbox-stage .lightbox-img {
-  display: block;
-}
+.lightbox-stage .lightbox-img { display: block; }
 
 /* Lightbox corners: fixed size (no hover-grow), brighter, offset from image edge */
-.lightbox-stage .corner {
+.lb-inner .corner {
   opacity: 0.9;
   width: 22px;
   height: 22px;
@@ -410,25 +423,25 @@ header, footer, .year-header {
 .lightbox-stage .corner.lt-br { bottom: 8px; right: 8px; border-bottom: 2px solid rgba(255,255,255,0.85); border-right: 2px solid rgba(255,255,255,0.85); }
 
 /* Until the big image loads: image clipped to a center point, corners
-   converged there, then everything expands together (cards do the same). */
-.lightbox-stage .lightbox-img {
+   converged there, then everything expands together (per slot, b29 v2). */
+.lb-inner .lightbox-img {
   clip-path: inset(49.6% 49.6% 49.6% 49.6%);
   opacity: 0;
   transition: clip-path 0.85s cubic-bezier(0.16, 1, 0.3, 1),
               opacity 0.5s ease 0.08s;
-  will-change: clip-path;
+  /* no will-change: iOS evicts tiles of permanently-promoted layers */
 }
-.lightbox-stage.loaded .lightbox-img {
+.lb-inner.loaded .lightbox-img {
   clip-path: inset(0 0 0 0);
   opacity: 1;
 }
-.lightbox-stage:not(.loaded) .corner.lt-tl { top: calc(50% - 11px); left: calc(50% - 11px); }
-.lightbox-stage:not(.loaded) .corner.lt-tr { top: calc(50% - 11px); right: calc(50% - 11px); }
-.lightbox-stage:not(.loaded) .corner.lt-bl { bottom: calc(50% - 11px); left: calc(50% - 11px); }
-.lightbox-stage:not(.loaded) .corner.lt-br { bottom: calc(50% - 11px); right: calc(50% - 11px); }
+.lb-inner:not(.loaded) .corner.lt-tl { top: calc(50% - 11px); left: calc(50% - 11px); }
+.lb-inner:not(.loaded) .corner.lt-tr { top: calc(50% - 11px); right: calc(50% - 11px); }
+.lb-inner:not(.loaded) .corner.lt-bl { bottom: calc(50% - 11px); left: calc(50% - 11px); }
+.lb-inner:not(.loaded) .corner.lt-br { bottom: calc(50% - 11px); right: calc(50% - 11px); }
 @media (prefers-reduced-motion: reduce) {
-  .lightbox-stage .corner,
-  .lightbox-stage .lightbox-img { transition: none; }
+  .lb-inner .corner,
+  .lb-inner .lightbox-img { transition: none; }
 }
 
 .lightbox-close {

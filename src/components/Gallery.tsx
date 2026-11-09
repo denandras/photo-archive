@@ -106,48 +106,113 @@ function PhotoCard({
 }
 
 /* Lightbox stage: big image + corners uncrop together, exactly like the cards */
+/* ===== Lightbox stage v2 (b29, rebuilt): two stacked slots.
+   Swap: the incoming image stays invisible until its bytes arrive, then it
+   expands on top while the outgoing reverses underneath — no frame has
+   nothing on screen. Fast swipes retarget the pending slot. ===== */
 function LightboxStage({ photo }: { photo: Photo }) {
-  // b25: photo changes play the choreography in reverse at normal speed —
-  // the old image closes back to its center point, then the new one expands.
-  const [current, setCurrent] = useState(photo);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    if (photo.full === current.full) return;
-    // Close: dropping .loaded runs the transition backwards (old image stays
-    // mounted underneath until the swap).
-    setLoaded(false);
-    const t = window.setTimeout(() => setCurrent(photo), 780);
-    return () => clearTimeout(t);
-    // current.full omitted on purpose: only respond to the incoming prop
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photo.full]);
-  const flip = useCallback(() => {
-    requestAnimationFrame(() => requestAnimationFrame(() => setLoaded(true)));
+  type SlotLb = { photo: Photo | null; loaded: boolean; above: boolean };
+  const [slots, setSlots] = useState<SlotLb[]>([
+    { photo, loaded: false, above: false },
+    { photo: null, loaded: false, above: false },
+  ]);
+  const activeRef = useRef(0);
+  const incomingRef = useRef<number | null>(null);
+  const shownRef = useRef<string | null>(null);
+  const fallbackTimer = useRef<number | null>(null);
+
+  // Finalize: promoted slot becomes the background; retired slot emptied.
+  const finalize = useCallback((promoted: number) => {
+    if (fallbackTimer.current) {
+      clearTimeout(fallbackTimer.current);
+      fallbackTimer.current = null;
+    }
+    incomingRef.current = null;
+    activeRef.current = promoted;
+    setSlots(prev =>
+      prev.map((s, i) =>
+        i === promoted
+          ? { ...s, above: false }
+          : { photo: null, loaded: false, above: false }
+      )
+    );
   }, []);
+
+  const markLoaded = useCallback((i: number) => {
+    setSlots(prev => {
+      if (prev[i]?.loaded) return prev;
+      const next = prev.map((s, j) => (j === i ? { ...s, loaded: true } : s));
+      if (incomingRef.current !== i) return next;
+      // incoming arrived while swapping: reverse the outgoing underneath
+      return next.map((s, j) => (j !== i && s.photo && s.loaded ? { ...s, loaded: false } : s));
+    });
+    if (incomingRef.current !== i) return;
+    // settle shortly after both choreographies, with a load-error fallback
+    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+    fallbackTimer.current = window.setTimeout(() => {
+      finalize(i);
+    }, 950);
+  }, [finalize]);
+
+  useEffect(() => {
+    if (shownRef.current === photo.full) return;
+    const first = shownRef.current === null;
+    shownRef.current = photo.full;
+    if (first) return;
+    // start / retarget a swap: newest photo goes to the non-active slot, on top
+    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
+    setSlots(prev => {
+      const incoming = prev.findIndex(s => s.above);
+      if (incoming === -1) {
+        const target = 1 - activeRef.current;
+        incomingRef.current = target;
+        return prev.map((s, i) =>
+          i === target ? { photo, loaded: false, above: true } : { ...s, above: false }
+        );
+      }
+      // mid-swap retarget: same slot takes the newest photo, re-expands
+      incomingRef.current = incoming;
+      return prev.map((s, i) =>
+        i === incoming ? { photo, loaded: false, above: true } : s
+      );
+    });
+  }, [photo]);
+
   return (
     <div
-      className={`lightbox-stage${loaded ? " loaded" : ""}`}
+      className="lightbox-stage"
       onClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={current.full}
-        alt=""
-        className="lightbox-img"
-        width={current.w || undefined}
-        height={current.h || undefined}
-        decoding="async"
-        draggable={false}
-        onLoad={flip}
-        ref={(el) => {
-          if (el && el.complete && el.naturalWidth > 0) flip();
-        }}
-      />
-      <span className="corner lt-tl" />
-      <span className="corner lt-tr" />
-      <span className="corner lt-bl" />
-      <span className="corner lt-br" />
+      {slots.map((s, i) =>
+        s.photo ? (
+          <div
+            key={`${i}-${s.photo.full}`}
+            className={`lb-slot${s.above ? " lb-above" : ""}`}
+          >
+            <div className={`lb-inner${s.loaded ? " loaded" : ""}`}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={s.photo.full}
+                alt=""
+                className="lightbox-img"
+                width={s.photo.w || undefined}
+                height={s.photo.h || undefined}
+                decoding="async"
+                draggable={false}
+                onLoad={() => markLoaded(i)}
+                ref={(el) => {
+                  if (el && el.complete && el.naturalWidth > 0) markLoaded(i);
+                }}
+              />
+              <span className="corner lt-tl" />
+              <span className="corner lt-tr" />
+              <span className="corner lt-bl" />
+              <span className="corner lt-br" />
+            </div>
+          </div>
+        ) : null
+      )}
     </div>
   );
 }
