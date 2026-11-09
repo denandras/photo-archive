@@ -76,11 +76,16 @@ def is_whitelisted(key: str, rules) -> bool:
     def matches(rule: str) -> bool:
         if key.startswith(rule):
             return True
-        # a rule naming a folder must match ANY directory component of the
-        # path, so "2024-10-08 Garda" catches "2024/2024-10-08 Garda/..."
-        for part in key.split("/")[:-1]:
-            if part == rule or part.startswith(rule):
+        dirs = key.split("/")[:-1]
+        # single-segment rule: any folder component matches by prefix
+        # ("2024-10-08 Garda" catches "2024/2024-10-08 Garda/...")
+        for c in dirs:
+            if c == rule or c.startswith(rule):
                 return True
+        # multi-segment rule ("2026-01-23 Street/_Export"): appears
+        # contiguously somewhere in the folder path, at any depth
+        if "/" in rule and ("/" + rule) in ("/" + "/".join(dirs) + "/"):
+            return True
         return False
 
     for rule in rules:

@@ -23,10 +23,22 @@ Image.MAX_IMAGE_PIXELS = None
 from whitelist import (load_whitelist_text, parse_whitelist, is_whitelisted,
                        is_private, get_s3_client)
 
+try:
+    # iOS HEIC sources: decode via libheif so thumbs + JPEG fulls can build
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIC_OK = True
+except ImportError:
+    HEIC_OK = False
+
 THUMB_LONG_SIDE = 640
 THUMB_QUALITY = 72
+FULL_LONG_SIDE = 2560   # JPEG rendition for HEIC originals (browsers can't decode HEIC)
+FULL_QUALITY = 85
 SCAN_PREFIX = "media/kepek/Saját képek/"
 THUMB_PREFIX = "media/thumbs/"
+FULL_PREFIX = "media/fulls/"
+KEY_VERSION = "v2"  # bump when thumb params change — old-state entries rebuild
 WHITELIST_KEY = SCAN_PREFIX + "public-list.txt"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".thumbs_cache.json")
 BUCKET = "tb1"
@@ -70,25 +82,45 @@ def make_thumb(data: bytes) -> bytes:
     return buf.getvalue()
 
 
+def is_heic(key: str) -> bool:
+    return key.lower().endswith((".heic", ".heif"))
+
+
+def make_full(data: bytes) -> bytes:
+    """Browser-displayable JPEG rendition (for HEIC originals)."""
+    im = Image.open(io.BytesIO(data))
+    im = ImageOps.exif_transpose(im)
+    if im.mode not in ("RGB", "L"):
+        im = im.convert("RGB")
+    im.thumbnail((FULL_LONG_SIDE, FULL_LONG_SIDE), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=FULL_QUALITY, optimize=True, progressive=True)
+    return buf.getvalue()
+
+
 def main():
     limit = int(sys.argv[1]) if len(sys.argv) > 1 else None
     s3 = get_s3_client()
     state = load_state()
 
     items = current_items(s3)
+    if not HEIC_OK:
+        items = [it for it in items if not is_heic(it["key"])]
     # Thumb key mirrors the original *below* media/: thumbs/<rel-to-media/>
     thumb_keys = {THUMB_PREFIX + it["key"][len("media/"):] for it in items}
+    full_keys = {FULL_PREFIX + it["key"][len("media/"):] + ".jpg" for it in items if is_heic(it["key"])}
     live_keys = {it["key"] for it in items}
 
     pending = [it for it in items
-               if state.get(f"{it['key']}|{it['size']}|{it['etag']}") is not True]
+               if state.get(f"{it['key']}|{it['size']}|{it['etag']}|{KEY_VERSION}") is not True]
     if limit:
         pending = pending[:limit]
-    print(f"{len(items)} publishable images, {len(pending)} thumbs to build")
+    heic_n = sum(1 for it in items if is_heic(it["key"]))
+    print(f"{len(items)} publishable images ({heic_n} heic), {len(pending)} thumbs to build", flush=True)
 
     done = 0
     for it in items:
-        ckey = f"{it['key']}|{it['size']}|{it['etag']}"
+        ckey = f"{it['key']}|{it['size']}|{it['etag']}|{KEY_VERSION}"
         if state.get(ckey) is True:
             continue
         try:
@@ -99,24 +131,32 @@ def main():
             s3.put_object(Bucket=BUCKET, Key=thumb_key, Body=webp,
                           ContentType="image/webp",
                           CacheControl="public, max-age=31536000, immutable")
+            # HEIC originals can't display in browsers — publish a JPEG full
+            if is_heic(it["key"]):
+                s3.put_object(Bucket=BUCKET,
+                              Key=FULL_PREFIX + it["key"][len("media/"):] + ".jpg",
+                              Body=make_full(data), ContentType="image/jpeg",
+                              CacheControl="public, max-age=31536000, immutable")
             state[ckey] = True
             done += 1
             if done % 25 == 0:
                 with open(STATE_FILE, "w") as f:
                     json.dump(state, f)
-                print(f"  {done}/{len(pending)}")
+                print(f"  {done}/{len(pending)}", flush=True)
         except Exception as e:
-            print(f"  skip {it['key']}: {e}")
+            print(f"  skip {it['key']}: {e}", flush=True)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-    # Sweep thumbs whose original is gone/renamed/private — privacy-critical.
+    # Sweep thumbs and HEIC fulls whose original is gone/renamed/private —
+    # privacy-critical.
     stale = []
     pag = s3.get_paginator("list_objects_v2")
-    for page in pag.paginate(Bucket=BUCKET, Prefix=THUMB_PREFIX):
-        for obj in page.get("Contents", []):
-            if obj["Key"] not in thumb_keys:
-                stale.append(obj["Key"])
+    for prefix, allowed in ((THUMB_PREFIX, thumb_keys), (FULL_PREFIX, full_keys)):
+        for page in pag.paginate(Bucket=BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                if obj["Key"] not in allowed:
+                    stale.append(obj["Key"])
     for key in stale:
         try:
             s3.delete_object(Bucket=BUCKET, Key=key)

@@ -11,8 +11,11 @@ type GalleryPhoto = {
   h: number;
 };
 
-// Only show formats browsers can render natively (HEIC excluded)
-const BROWSER_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "avif"]);
+// Formats browsers render natively. HEIC included since b18-era support: the
+// card preview is the WebP thumb and the lightbox "full" is the JPEG
+// rendition the thumb builder publishes (media/fulls/<key>.jpg) — raw HEIC
+// only renders on iOS Safari, so never link it directly.
+const BROWSER_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "avif", "heic", "heif"]);
 
 export default async function Page() {
   let data: Record<string, Record<string, GalleryPhoto[]>> = {};
@@ -27,13 +30,20 @@ export default async function Page() {
             const ext = p.key.split(".").pop()?.toLowerCase() || "";
             return BROWSER_EXTS.has(ext);
           })
-          .map((p) => ({
-            src: `/api/media?key=${encodeURIComponent("thumbs/" + p.key)}`,
-            full: `/api/media?key=${encodeURIComponent(p.key)}`,
-            key: p.key,
-            w: p.width || 600,
-            h: p.height || 400,
-          }));
+          .map((p) => {
+            const ext = p.key.split(".").pop()?.toLowerCase() || "";
+            // HEIC originals are not browser-renderable — serve the JPEG rendition
+            const fullKey = ext === "heic" || ext === "heif"
+              ? `${p.key}.jpg`
+              : p.key;
+            return {
+              src: `/api/media?key=${encodeURIComponent("thumbs/" + p.key)}`,
+              full: `/api/media?key=${encodeURIComponent(fullKey)}`,
+              key: p.key,
+              w: p.width || 600,
+              h: p.height || 400,
+            };
+          });
         if (galleryPhotos.length > 0) yearData[day] = galleryPhotos;
       }
       if (Object.keys(yearData).length > 0) data[year] = yearData;
