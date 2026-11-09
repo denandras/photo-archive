@@ -1,26 +1,380 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #000;
+  --fg: #fff;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  scroll-behavior: auto;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ===== Horizontal marquee viewport ===== */
+.scroll-viewport {
+  overflow: hidden;
+  /* Tiny inter-row spacing, matching the 14px intra-row image gap */
+  padding: 4px 0;
+  margin-bottom: 6px;
+  cursor: grab;
+  contain: layout style;
+  /* Horizontal pans stay in-app (transform marquee); vertical pans scroll page */
+  touch-action: pan-y;
+}
+
+@media (hover: none) {
+  .scroll-viewport {
+    cursor: default;
+  }
+}
+
+.scroll-track {
+  display: flex;
+  /* Copies carry their own trailing pad (inter-copy gap == intra-copy gap) */
+  width: max-content;
+  align-items: center;
+  /* GPU-composited marquee (transform driven from JS) */
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.scroll-copy {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  /* Trailing pad = the gap between consecutive copies (seamless tiling) */
+  padding-right: 14px;
+  flex-shrink: 0;
+  width: max-content;
+}
+
+/* ===== Photo card ===== */
+.photo-card {
+  position: relative;
+  flex-shrink: 0;
+  height: 160px;
+  overflow: hidden;
+  background: #0a0a0a;
+  contain: layout style paint;
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+              z-index 0s 0.35s;
+  cursor: pointer;
+}
+
+.photo-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-drag: none;
+  background: #0a0a0a;
+}
+
+/* ===== Hover-focus: image pops forward ===== */
+@media (hover: hover) {
+  .photo-card:hover {
+    transform: scale(1.2);
+    z-index: 20;
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                z-index 0s 0s;
+    box-shadow: 0 20px 60px -10px rgba(0, 0, 0, 0.8),
+                0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ===== Architectural corner markers (L-shaped) ===== */
+.corner {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+  transition: opacity 0.3s ease, width 0.3s ease, height 0.3s ease;
+  opacity: 0.4;
+  z-index: 2;
+}
+
+@media (hover: hover) {
+  .photo-card:hover .corner {
+    opacity: 1;
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.corner.tl {
+  top: 5px;
+  left: 5px;
+  border-top: 1.5px solid rgba(255, 255, 255, 0.8);
+  border-left: 1.5px solid rgba(255, 255, 255, 0.8);
+}
+.corner.tr {
+  top: 5px;
+  right: 5px;
+  border-top: 1.5px solid rgba(255, 255, 255, 0.8);
+  border-right: 1.5px solid rgba(255, 255, 255, 0.8);
+}
+.corner.bl {
+  bottom: 5px;
+  left: 5px;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.8);
+  border-left: 1.5px solid rgba(255, 255, 255, 0.8);
+}
+.corner.br {
+  bottom: 5px;
+  right: 5px;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.8);
+  border-right: 1.5px solid rgba(255, 255, 255, 0.8);
+}
+
+/* ===== Year header (clickable, collapsible) ===== */
+.year-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 20px 16px;
+  background: #000;
+  contain: layout style;
+  cursor: pointer;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+
+.year-text {
+  font-size: clamp(3rem, 8vw, 6rem);
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.22);
+  letter-spacing: -0.05em;
+  font-family: var(--font-geist-mono), monospace;
+  user-select: none;
+  line-height: 1;
+  pointer-events: none;
+  transition: color 0.3s ease;
+}
+
+.year-header:hover .year-text {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* ===== Animated toggle: dash (expanded) ↔ plus (collapsed) ===== */
+.year-toggle-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.toggle-icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.toggle-icon::before,
+.toggle-icon::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 1px;
+  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Horizontal bar (always visible) */
+.toggle-icon::before {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+/* Vertical bar — visible (plus) when collapsed, rotated 90° (dash) when expanded */
+.toggle-icon::after {
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-50%) rotate(90deg);
+}
+
+.year-section.collapsed .toggle-icon::after {
+  transform: translateX(-50%) rotate(0deg);
+}
+
+/* ===== Year collapse/expand animation (CSS grid trick) ===== */
+.year-content {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.year-section.collapsed .year-content {
+  grid-template-rows: 0fr;
+}
+
+.year-content-inner {
+  overflow: hidden;
+}
+
+/* Skip rendering off-screen year sections — major perf win */
+.year-section {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 500px;
+}
+
+/* ===== Mobile ===== */
+@media (max-width: 768px) {
+  .photo-card {
+    height: 120px;
+  }
+  .year-header {
+    padding: 14px 12px;
+  }
+  .scroll-viewport {
+    padding: 4px 0;
+    margin-bottom: 6px;
+  }
+  .corner {
+    width: 9px;
+    height: 9px;
+  }
+  .scroll-track {
+    gap: 10px;
+  }
+}
+
+/* ===== Download prevention ===== */
+.scroll-track img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  -webkit-touch-callout: none;
+}
+
+/* Disable text selection on UI chrome */
+header, footer, .year-header {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ===== Lightbox ===== */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+
+.lightbox-img {
+  max-width: 94vw;
+  max-height: 88vh;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  pointer-events: none;
+}
+
+/* ===== Lightbox preview stage: corners hug the actual image ===== */
+.lightbox-stage {
+  position: relative;
+  display: inline-block; /* shrink-wraps the img so corners sit on image, not viewport */
+  max-width: 94vw;
+  max-height: 88vh;
+}
+/* The img keeps its sizing; stage size follows it */
+.lightbox-stage .lightbox-img {
+  display: block;
+}
+
+/* Lightbox corners: fixed size (no hover-grow), brighter, offset from image edge */
+.lightbox-stage .corner {
+  opacity: 0.9;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  z-index: 30;
+}
+.lightbox-stage .corner.lt-tl { top: 8px; left: 8px; border-top: 2px solid rgba(255,255,255,0.85); border-left: 2px solid rgba(255,255,255,0.85); }
+.lightbox-stage .corner.lt-tr { top: 8px; right: 8px; border-top: 2px solid rgba(255,255,255,0.85); border-right: 2px solid rgba(255,255,255,0.85); }
+.lightbox-stage .corner.lt-bl { bottom: 8px; left: 8px; border-bottom: 2px solid rgba(255,255,255,0.85); border-left: 2px solid rgba(255,255,255,0.85); }
+.lightbox-stage .corner.lt-br { bottom: 8px; right: 8px; border-bottom: 2px solid rgba(255,255,255,0.85); border-right: 2px solid rgba(255,255,255,0.85); }
+
+.lightbox-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 2.5rem;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1001;
+  transition: color 0.2s ease;
+}
+
+.lightbox-close:hover {
+  color: #fff;
+}
+
+.lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 3rem;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1001;
+  padding: 0.5rem 1rem;
+  transition: color 0.2s ease;
+}
+
+.lightbox-nav:hover {
+  color: #fff;
+}
+
+.lightbox-prev { left: 0.5rem; }
+.lightbox-next { right: 0.5rem; }
+
+.lightbox-counter {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(255, 255, 255, 0.5);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.85rem;
+  z-index: 1001;
+  pointer-events: none;
 }

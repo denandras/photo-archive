@@ -1,5 +1,5 @@
 {
-  "name": "photos-andrasdenes",
+  "name": "photo-archive",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1164.0",
     "next": "16.4.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"
