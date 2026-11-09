@@ -65,16 +65,30 @@ def is_whitelisted(key: str, rules) -> bool:
     Rules are also relative to the scan root, but folders can be nested
     (e.g. "2024/2024-10-08 Garda/..."), so a rule matches if it is a prefix
     of the key OR of any cumulative directory prefix of it.
+
+    A rule starting with '!' is a NEGATION: that subtree (or single file) is
+    private even though a parent rule publishes it. Exclusions always win,
+    regardless of order:
+
+        2024/
+        !2024/2024-10-09 Réka privát/
     """
-    for rule in rules:
+    def matches(rule: str) -> bool:
         if key.startswith(rule):
             return True
-        parts = key.split("/")
         # a rule naming a folder must match ANY directory component of the
         # path, so "2024-10-08 Garda" catches "2024/2024-10-08 Garda/..."
-        for part in parts[:-1]:
+        for part in key.split("/")[:-1]:
             if part == rule or part.startswith(rule):
                 return True
+        return False
+
+    for rule in rules:
+        if rule.startswith("!") and matches(rule[1:]):
+            return False
+    for rule in rules:
+        if not rule.startswith("!") and matches(rule):
+            return True
     return False
 
 
