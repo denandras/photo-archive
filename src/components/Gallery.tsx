@@ -57,10 +57,11 @@ function PhotoCard({
           }
         }
       },
-      // Load ~1200px ahead on both sides: visible-first, then the stream
-      // ahead (4000px made the first screenful compete with 40 queued thumbs
-      // — on a phone the visible strip completed in visible left→right waves)
-      { rootMargin: "0px 1200px 0px 1200px" }
+      // Load ~1200px ahead horizontally, ~800px vertically: after a fast
+      // swipe lands on a new row its thumbs should already be in flight;
+      // zero vertical margin made freshly-revealed rows render as empty
+      // strips (b25).
+      { rootMargin: "800px 1200px 800px 1200px" }
     );
     io.observe(el);
     return () => io.disconnect();
