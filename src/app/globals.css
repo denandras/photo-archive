@@ -93,6 +93,13 @@ body {
 
 /* ===== Hover-focus: image pops forward ===== */
 @media (hover: hover) {
+  /* Lift the hovered card's whole row above neighboring rows: the pop must
+     paint in front of the row BELOW too (later DOM rows paint on top, and the
+     card's z-index can't escape its viewport's stacking context). */
+  .scroll-viewport:has(.photo-card:hover) {
+    position: relative;
+    z-index: 30;
+  }
   .photo-card:hover {
     transform: scale(1.2);
     z-index: 20;
