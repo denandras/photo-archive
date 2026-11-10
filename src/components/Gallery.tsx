@@ -534,6 +534,55 @@ function YearSection({
 }) {
   const [collapsed, setCollapsed] = useState(true);
   const dayEntries = Object.entries(days);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const animRef = useRef<Animation | null>(null);
+
+  const toggleCollapsed = () => {
+    const el = contentRef.current;
+    if (!el) {
+      setCollapsed((c) => !c);
+      return;
+    }
+    /* b43: year open/close via WAAPI height animation — the old 0fr↔1fr grid
+       transition is treated as DISCRETE (verified: transitionrun fires, height
+       snaps 0→870 in one step), and plain height transitions proved
+       unreliable on this element; WAAPI is rAF-driven and exact. */
+    animRef.current?.cancel();
+    animRef.current = null;
+    const dur = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 500;
+    if (collapsed) {
+      // EXPAND: flip the class first (React commit), then pin + animate.
+      setCollapsed(false);
+      requestAnimationFrame(() => {
+        const target = el.scrollHeight;
+        el.style.overflowY = "hidden";
+        const a = el.animate(
+          [{ height: "0px" }, { height: `${target}px` }],
+          { duration: dur, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
+        );
+        animRef.current = a;
+        a.onfinish = () => {
+          el.style.overflowY = "";
+          animRef.current = null;
+        };
+      });
+    } else {
+      // COLLAPSE: animate from today's height to 0, THEN collapse the class
+      // (which skips rendering the rows) — content stays put while shrinking.
+      const from = el.getBoundingClientRect().height;
+      el.style.overflowY = "hidden";
+      const a = el.animate(
+        [{ height: `${from}px` }, { height: "0px" }],
+        { duration: dur, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
+      );
+      animRef.current = a;
+      a.onfinish = () => {
+        el.style.overflowY = "";
+        setCollapsed(true);
+        animRef.current = null;
+      };
+    }
+  };
 
   // Expand client-side only (SSR renders collapsed; hydration timing with
   // window-dependent initial state is unreliable) — permalink ?y= expands.
@@ -555,7 +604,7 @@ function YearSection({
     <section className={`year-section${collapsed ? " collapsed" : ""}`}>
       <button
         className="year-header"
-        onClick={() => setCollapsed((c) => !c)}
+        onClick={toggleCollapsed}
         aria-expanded={!collapsed}
         aria-label={collapsed ? `Expand ${year}` : `Collapse ${year}`}
       >
@@ -564,7 +613,7 @@ function YearSection({
           <span className="toggle-icon" />
         </div>
       </button>
-      <div className="year-content">
+      <div className="year-content" ref={contentRef}>
         <div className="year-content-inner">
           {dayEntries.map(([day, photos], i) => (
             <ScrollRow

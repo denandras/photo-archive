@@ -296,7 +296,7 @@ body {
   transform: translateX(-50%) rotate(0deg);
 }
 
-/* ===== Year collapse/expand animation (CSS grid trick) ===== */
+/* ===== Year collapse/expand ===== */
 .year-content {
   display: grid;
   grid-template-rows: 1fr;
@@ -304,7 +304,10 @@ body {
      max-content (99k px per long strip), inflating the viewport and every
      viewport-width computation. minmax(0,1fr) pins it to the section width. */
   grid-template-columns: minmax(0, 1fr);
-  transition: grid-template-rows 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  /* b43: height animates via explicit px pins set in YearSection.toggle
+     (the old 0fr↔1fr grid transition is treated as discrete — no animation).
+     This height rule makes those inline-pin animations run. */
+  transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   /* let the hover-pop escape above/below; only collapsed rows mask */
   overflow-y: visible;
   overflow-x: clip;
