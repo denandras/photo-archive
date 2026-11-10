@@ -18,7 +18,7 @@ function downloadHref(p: Photo) {
   return `${p.full}${sep}dl=${encodeURIComponent(p.name)}`;
 }
 
-export default function ShareGallery({ photos }: { photos: Photo[] }) {
+export default function ShareGallery({ photos, slug }: { photos: Photo[]; slug: string }) {
   const [lightbox, setLightbox] = useState<{ photos: Photo[]; index: number } | null>(null);
   const [mounted, setMounted] = useState(false);
   const [lbClosing, setLbClosing] = useState(false);
@@ -95,6 +95,16 @@ export default function ShareGallery({ photos }: { photos: Photo[] }) {
         onOpen={openLightbox}
         variant="share"
       />
+
+      {/* Grab the whole folder as one ZIP (originals; HEIC lands as JPEG renditions) */}
+      <div className="share-download-bar">
+        <a
+          className="share-download-all"
+          href={`/api/share/${encodeURIComponent(slug)}/download`}
+        >
+          Download all ({photos.length})
+        </a>
+      </div>
 
       {mounted && lightbox &&
         createPortal(

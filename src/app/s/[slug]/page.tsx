@@ -102,7 +102,7 @@ export default async function SharePage({
       <BuildWatchdog />
       <SiteHeader />
       <div className="pb-32">
-        <ShareGallery photos={photos} />
+        <ShareGallery photos={photos} slug={slug} />
       </div>
       <SiteFooter />
     </main>
