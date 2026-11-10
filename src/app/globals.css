@@ -63,13 +63,20 @@ body {
   position: relative;
   /* Copies carry their own trailing pad (inter-copy gap == intra-copy gap) */
   width: max-content;
-  /* Persist the transform layer so image decodes never demote it (b20) */
-  /* (already declared below — kept single) */
+  /* b41: will-change/backface removed — see the .scroll-track rule above.
+     (b20's "persist the transform layer" idea is Chrome-side only; any WebKit
+     promotion of a max-content track breaches the 16k texture limit.) */
   align-items: center;
-  /* GPU-composited marquee (transform driven from JS) */
-  will-change: transform;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  /* b41: NO will-change/transform promotion on the track. will-change made
+     WebKit (iOS 17/18) promote the whole max-content track to a PERMANENT
+     composited layer; combined with Metal's hard 16,384-device-px texture
+     ceiling and ~250MB/tab jetsam, rows died one after another as strips
+     (copies × half × dpr) crossed the limit — "everything disappears after a
+     while" on iPhone. Without will-change, WebKit paints the transformed
+     track as per-frame visible TILES only — no oversize layer, minimal
+     memory. Chrome tiles either way; JS drives the transform per frame, so
+     no animation smoothness is lost. (b20's encode-flash worry is a Chrome
+     concern only; tile painting re-covers it.) */
 }
 
 .scroll-copy {

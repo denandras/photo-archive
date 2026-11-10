@@ -269,8 +269,12 @@ function ScrollRow({
       }
     }
     posRef.current = p;
-    // GPU transform marquee — bypasses iOS Safari's compositor-owned scrollLeft
-    track.style.transform = `translate3d(${-p}px, 0, 0)`;
+    /* b41: 2D transform ONLY — translate3d/translateZ is ITSELF a layer
+       promotion in WebKit: with will-change gone, a 3D matrix would still
+       hand the whole max-content track to the compositor and hit Metal's
+       16,384-device-px texture ceiling (⇒ iPhone rows paint blank then
+       "die"). 2D translateX paints through the tiled main-thread path. */
+    track.style.transform = `translateX(${-p}px)`;
 
     // b31: derive which cards are in load range from the marquee math —
     // direction-symmetric, clip-proof (IO margins are defeated by the rows'
@@ -323,7 +327,7 @@ function ScrollRow({
         }
       }
     }
-    track.style.transform = `translate3d(${-p}px, 0, 0)`;
+    track.style.transform = `translateX(${-p}px)`;
   }, [measureHalf, setInRange]);
 
   // Marquee loop via rAF + transform (compositor-friendly, works on iOS)
