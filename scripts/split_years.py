@@ -50,7 +50,13 @@ def main():
 
     s3 = get_s3_client()
     from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private
-    rules = parse_whitelist(load_whitelist_text(s3, BUCKET, SCAN_PREFIX + "public-list.txt"))
+    try:
+        rules = parse_whitelist(load_whitelist_text(s3, BUCKET, SCAN_PREFIX + "public-list.txt"))
+    except Exception as e:
+        # Whitelist unreachable: abort WITHOUT writing/deleting any year file —
+        # an empty ruleset would wipe the whole site.
+        print(f"❌ public-list.txt fetch failed ({e}) — aborting, year files untouched")
+        sys.exit(1)
     print(f"Whitelist: {len(rules)} rule(s)")
 
     years = {}  # year -> day -> [photo]

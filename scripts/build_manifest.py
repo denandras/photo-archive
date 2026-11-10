@@ -23,7 +23,7 @@ from datetime import datetime
 import boto3
 
 from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private, \
-    parse_share_list
+    parse_share_list, load_optional_text
 
 OUTPUT_FILE = "public/manifest.json"
 SHARES_DIR = "public/shares"
@@ -41,7 +41,13 @@ BUCKET = "tb1"
 PREFIX_TRIM = len("media/")
 
 def load_whitelist(s3):
-    rules = parse_whitelist(load_whitelist_text(s3, BUCKET, WHITELIST_KEY))
+    try:
+        rules = parse_whitelist(load_whitelist_text(s3, BUCKET, WHITELIST_KEY))
+    except Exception as e:
+        # The whitelist is authoritative — never build/publish an empty
+        # manifest just because S3 hiccuped; abort and leave outputs alone.
+        print(f"❌ public-list.txt fetch failed ({e}) — aborting, outputs untouched")
+        sys.exit(1)
     print(f"Whitelist: {len(rules)} rule(s)")
     return rules
 
@@ -146,7 +152,13 @@ def resolve_dt(rec, rel_key, counters):
 def build_shares(s3, all_images, cache, fetched_ref):
     """Build public/shares/<slug>.json for every folder in share-list.txt.
     Unlisted on the landing site; each folder becomes one slug page."""
-    share_text = load_whitelist_text(s3, BUCKET, SHARE_LIST_KEY)
+    share_text = None
+    try:
+        share_text = load_optional_text(s3, BUCKET, SHARE_LIST_KEY)
+    except Exception as e:
+        print(f"⚠️ share-list.txt fetch failed ({e}) — leaving existing share files untouched")
+    if share_text is None:
+        return {"untagged": 0, "pathdated": 0}
     share_rules = parse_share_list(share_text)
     print(f"Share list: {len(share_rules)} shared folder(s)")
     os.makedirs(SHARES_DIR, exist_ok=True)

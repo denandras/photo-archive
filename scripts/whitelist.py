@@ -19,6 +19,7 @@ import unicodedata
 from datetime import datetime
 
 import boto3
+from botocore.exceptions import ClientError
 
 # Image extensions whose trailing suffix must be stripped before the
 # private-marker check (so "name.p.jpg" resolves to stem "name.p").
@@ -43,11 +44,27 @@ def is_private(key: str) -> bool:
 
 
 def load_whitelist_text(s3, bucket: str, key: str) -> str:
+    """Fetch a list file. RAISES on fetch failure — callers decide their
+    fallback policy. Tolerating errors by returning "" here wiped all
+    renditions once (empty whitelist -> empty publish set -> sweep deleted
+    every HEIC thumb/full), so failing loudly is now the shared contract."""
+    resp = s3.get_object(Bucket=bucket, Key=key)
+    return resp["Body"].read().decode("utf-8", errors="replace")
+
+
+def load_optional_text(s3, bucket: str, key: str) -> str:
+    """For OPTIONAL list files (share-list.txt may not exist until the first
+    folder is shared). A definitive NoSuchKey = empty text — NOT the same as a
+    transient failure, which still raises (an empty parse must never be the
+    result of an S3 hiccup)."""
     try:
-        resp = s3.get_object(Bucket=bucket, Key=key)
-        return resp["Body"].read().decode("utf-8", errors="replace")
-    except Exception:
+        return load_whitelist_text(s3, bucket, key)
+    except s3.exceptions.NoSuchKey:
         return ""
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "NoSuchKey":
+            return ""
+        raise
 
 
 def parse_whitelist(text: str):

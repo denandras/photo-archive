@@ -21,7 +21,8 @@ from PIL import Image, ImageOps
 Image.MAX_IMAGE_PIXELS = None
 
 from whitelist import (load_whitelist_text, parse_whitelist, is_whitelisted,
-                       is_private, parse_share_list, get_s3_client)
+                       is_private, parse_share_list, load_optional_text,
+                       get_s3_client)
 
 try:
     # iOS HEIC sources: decode via libheif so thumbs + JPEG fulls can build
@@ -57,10 +58,14 @@ def load_state():
 
 
 def current_items(s3):
-    rules = parse_whitelist(load_whitelist_text(s3, BUCKET, WHITELIST_KEY))
-    # share-list.txt folders are NOT on the landing site but need thumbs (and
-    # HEIC fulls) too — else the stale-sweep below would delete their thumbs.
-    share_rules = parse_share_list(load_whitelist_text(s3, BUCKET, SHARE_LIST_KEY))
+    try:
+        rules = parse_whitelist(load_whitelist_text(s3, BUCKET, WHITELIST_KEY))
+        # share-list.txt folders are NOT on the landing site but need thumbs (and
+        # HEIC fulls) too — else the stale-sweep below would delete their thumbs.
+        share_rules = parse_share_list(load_optional_text(s3, BUCKET, SHARE_LIST_KEY))
+    except Exception as e:
+        print(f"❌ list fetch failed ({e}) — aborting, nothing swept")
+        sys.exit(1)
     out = []
     pag = s3.get_paginator("list_objects_v2")
     for page in pag.paginate(Bucket=BUCKET, Prefix=SCAN_PREFIX):
@@ -157,10 +162,21 @@ def main():
         json.dump(state, f)
 
     # Sweep thumbs and HEIC fulls whose original is gone/renamed/private —
-    # privacy-critical.
+    # privacy-critical. FAIL-SAFE: without pillow-heif this run cannot SEE
+    # HEIC items, so it must not delete their renditions either (a sweep with
+    # them excluded would nuke every HEIC thumb + full, it actually did once).
     stale = []
     pag = s3.get_paginator("list_objects_v2")
     for prefix, allowed in ((THUMB_PREFIX, thumb_keys), (FULL_PREFIX, full_keys)):
+        if not HEIC_OK:
+            if prefix == FULL_PREFIX:
+                print("heic support missing — fulls sweep skipped entirely", flush=True)
+                continue
+            for page in pag.paginate(Bucket=BUCKET, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    if obj["Key"] not in allowed and not obj["Key"].endswith((".heic", ".heif")):
+                        stale.append(obj["Key"])
+            continue
         for page in pag.paginate(Bucket=BUCKET, Prefix=prefix):
             for obj in page.get("Contents", []):
                 if obj["Key"] not in allowed:
