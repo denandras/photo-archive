@@ -80,10 +80,14 @@ function PhotoCard({
 }
 
 /* Lightbox stage: big image + corners uncrop together, exactly like the cards */
-/* ===== Lightbox stage v2 (b29, rebuilt): two stacked slots.
-   Swap: the incoming image stays invisible until its bytes arrive, then it
-   expands on top while the outgoing reverses underneath — no frame has
-   nothing on screen. Fast swipes retarget the pending slot. ===== */
+/* ===== Lightbox stage v3 (b48): SERIAL swap. The outgoing image first
+   CLOSES — the opening animation in reverse (clip to the center point,
+   corners converge) — and only when it has fully collapsed does the
+   incoming image OPEN from the middle (corners ride out, clip expands).
+   The incoming's bytes preload invisibly during the close so the open
+   starts the moment the close settles. No two images are ever visible at
+   once, and nothing stays open behind the new one. Close (✕ / backdrop)
+   freezes any mid-swap stage to its settled image. ===== */
 function LightboxStage({
   photo,
   onBusyChange,
@@ -93,20 +97,26 @@ function LightboxStage({
   onBusyChange?: (busy: boolean) => void;
   closing?: boolean;
 }) {
-  type SlotLb = { photo: Photo | null; loaded: boolean; above: boolean };
+  type SlotLb = {
+    photo: Photo | null;
+    revealed: boolean; // its close phase finished; visible from now on
+    bytes: boolean; // full image loaded (may still be hidden)
+    loaded: boolean; // expansion choreography running/done
+    above: boolean;
+    hidden: boolean; // preloading invisibly during the outgoing close
+  };
   const [slots, setSlots] = useState<SlotLb[]>([
-    { photo, loaded: false, above: false },
-    { photo: null, loaded: false, above: false },
+    { photo, revealed: true, bytes: false, loaded: false, above: true, hidden: false },
+    { photo: null, revealed: true, bytes: false, loaded: false, above: false, hidden: false },
   ]);
   const activeRef = useRef(0);
   const incomingRef = useRef<number | null>(null);
   const shownRef = useRef<string | null>(null);
-  const fallbackTimer = useRef<number | null>(null);
-  /* b46: busy gate — one swipe at a time. A swap is busy from (re)start to
-     finalize; setBusy(false) once settled, plus a watchdog in case the
-     incoming image never loads. Reported to the Gallery so flicks/nav during
-     a swap are ignored (rapid retargets piled up decodes → device crash,
-     and mid-swap closes fought the stage choreography). */
+  const revealTimer = useRef<number | null>(null);
+  const settleTimer = useRef<number | null>(null);
+  /* b46: busy gate — one swipe at a time. A swap is busy from start to
+     finalize; reported to the Gallery so flicks/nav during a swap are
+     ignored (rapid retargets piled up decodes → device crash). */
   const busyRef = useRef(false);
   const busyWatch = useRef<number | null>(null);
   const onBusyChangeRef = useRef(onBusyChange);
@@ -122,99 +132,88 @@ function LightboxStage({
       setBusy(false);
     }, 12000);
   }, [setBusy]);
-  const clearBusyWatch = useCallback(() => {
-    if (busyWatch.current) {
-      clearTimeout(busyWatch.current);
-      busyWatch.current = null;
-    }
+  const clearTimers = useCallback(() => {
+    if (busyWatch.current) { clearTimeout(busyWatch.current); busyWatch.current = null; }
+    if (revealTimer.current) { clearTimeout(revealTimer.current); revealTimer.current = null; }
+    if (settleTimer.current) { clearTimeout(settleTimer.current); settleTimer.current = null; }
   }, []);
 
-  // Finalize: promoted slot becomes the background; retired slot emptied.
+  // Finalize: the incoming slot becomes the background; the outgoing (fully
+  // closed by now) is unmounted. Swap settled — next swipe may start.
   const finalize = useCallback((promoted: number) => {
-    if (fallbackTimer.current) {
-      clearTimeout(fallbackTimer.current);
-      fallbackTimer.current = null;
-    }
-    clearBusyWatch();
-    setBusy(false); // b46: swap settled — next swipe may start
     incomingRef.current = null;
     activeRef.current = promoted;
     setSlots(prev =>
       prev.map((s, i) =>
-        i === promoted
-          ? { ...s, above: false }
-          : { photo: null, loaded: false, above: false }
+        i === promoted ? { ...s, above: false } : { ...s, photo: null }
       )
     );
-  }, [clearBusyWatch, setBusy]);
+    setBusy(false);
+  }, [setBusy]);
+
+  // Phase B: reveal the incoming slot — expansion choreography starts here
+  // (loaded flips immediately if its bytes already arrived while hidden).
+  const revealIncoming = useCallback(() => {
+    const i = incomingRef.current;
+    if (i === null) return;
+    setSlots(prev =>
+      prev.map((s, j) => (j === i ? { ...s, revealed: true, hidden: false, loaded: s.bytes } : s))
+    );
+  }, []);
 
   const markLoaded = useCallback((i: number) => {
     setSlots(prev => {
-      if (prev[i]?.loaded || !prev[i]?.photo) return prev; // b42: guard cleared slots
-      const next = prev.map((s, j) => (j === i ? { ...s, loaded: true } : s));
-      if (incomingRef.current !== i) return next;
-      // incoming arrived while swapping: reverse the outgoing underneath
-      return next.map((s, j) => (j !== i && s.photo && s.loaded ? { ...s, loaded: false } : s));
+      const s = prev[i];
+      if (!s?.photo || s.bytes) return prev;
+      const next = prev.map((x, j) => (j === i ? { ...x, bytes: true } : x));
+      if (next[i].revealed) next[i] = { ...next[i], loaded: true };
+      return next;
     });
-    if (incomingRef.current !== i) return;
-    // settle shortly after both choreographies, with a load-error fallback
-    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
-    fallbackTimer.current = window.setTimeout(() => {
-      finalize(i);
+    // settle after the expansion choreography (~0.95s), then finalize
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => {
+      if (incomingRef.current === i) finalize(i);
     }, 950);
   }, [finalize]);
 
-  /* b46b: closing while a swap is mid-flight — freeze the stage: drop the
-     incoming slot immediately (its expand choreography would fight the close
-     collapse), keep the settled image, release the busy gate. The close then
-     plays on a static, settled stage. */
+  useEffect(() => () => clearTimers(), [clearTimers]);
+
+  /* Close during a swap: the close CSS already collapses every slot image;
+     just drop the not-yet-arrived preload and release the gate. */
   useEffect(() => {
     if (!closing) return;
-    if (fallbackTimer.current) {
-      clearTimeout(fallbackTimer.current);
-      fallbackTimer.current = null;
-    }
-    clearBusyWatch();
+    clearTimers();
     setBusy(false);
     if (incomingRef.current !== null) {
+      const i = incomingRef.current;
       incomingRef.current = null;
       setSlots(prev =>
-        prev.map((s, i) =>
-          i === activeRef.current
-            ? { ...s, above: false }
-            : { photo: null, loaded: false, above: false }
-        )
+        prev.map((s, j) => (j === i && s.photo && !s.bytes ? { ...s, photo: null } : s))
       );
     }
-  }, [closing, clearBusyWatch, setBusy]);
+  }, [closing, clearTimers, setBusy]);
 
   useEffect(() => {
     if (shownRef.current === photo.full) return;
     const first = shownRef.current === null;
     shownRef.current = photo.full;
-    if (first) return;
-    if (closing) return; // b46b: freeze swaps while the close is playing
-    // b46: swap begins — gate further swipes until it settles
-    if (incomingRef.current === null || busyRef.current) setBusy(true);
+    if (first || closing) return;
+    // b48 SERIAL swap begins: close the old, preload the new invisibly.
+    clearTimers();
+    setBusy(true);
     armBusyWatch();
-    // start / retarget a swap: newest photo goes to the non-active slot, on top
-    if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
-    setSlots(prev => {
-      const incoming = prev.findIndex(s => s.above);
-      if (incoming === -1) {
-        const target = 1 - activeRef.current;
-        incomingRef.current = target;
-        return prev.map((s, i) =>
-          i === target ? { photo, loaded: false, above: true } : { ...s, above: false }
-        );
-      }
-      // mid-swap retarget: same slot takes the newest photo, re-expands
-      incomingRef.current = incoming;
-      return prev.map((s, i) =>
-        i === incoming ? { photo, loaded: false, above: true } : s
-      );
-    });
-  }, [photo]);
+    const target = 1 - activeRef.current;
+    incomingRef.current = target;
+    setSlots(prev =>
+      prev.map((s, j) =>
+        j === target
+          ? { photo, revealed: false, bytes: false, loaded: false, above: true, hidden: true }
+          : { ...s, above: false, loaded: false } // outgoing closes now
+      )
+    );
+    // Phase B: once the close fully played (clip transition is 0.85s)
+    revealTimer.current = window.setTimeout(revealIncoming, 880);
+  }, [photo, closing, clearTimers, setBusy, armBusyWatch, revealIncoming]);
 
   return (
     <div
@@ -226,7 +225,7 @@ function LightboxStage({
         s.photo ? (
           <div
             key={`${i}-${s.photo.full}`}
-            className={`lb-slot${s.above ? " lb-above" : ""}`}
+            className={`lb-slot${s.above ? " lb-above" : ""}${s.hidden ? " lb-hidden" : ""}`}
           >
             <div className={`lb-inner${s.loaded ? " loaded" : ""}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -242,9 +241,9 @@ function LightboxStage({
                 ref={(el) => {
                   /* b42: CACHED fulls are complete synchronously — flipping
                      loaded during the first paint skips the b14 start state
-                     entirely and the photo just pops in with no animation
-                     ("the new one just opens"). Double-rAF so the converged
-                     corners + center-point clip paint FIRST, then expand. */
+                     entirely and the photo just pops in with no animation.
+                     Double-rAF so the converged corners + center-point clip
+                     paint FIRST, then expand. */
                   if (el && el.complete && el.naturalWidth > 0) {
                     requestAnimationFrame(() => requestAnimationFrame(() => markLoaded(i)));
                   }

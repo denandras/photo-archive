@@ -399,6 +399,9 @@ header, footer, .year-header {
 }
 /* The incoming image expands ON TOP of the outgoing one */
 .lb-slot.lb-above { z-index: 2; }
+/* b48: preloading slot — fully invisible while the outgoing closes (its
+   converged corners must not paint on top of the closing image) */
+.lb-slot.lb-hidden { opacity: 0; }
 .lb-inner {
   position: relative;
   display: inline-block; /* shrink-wraps the img so corners sit on image */
