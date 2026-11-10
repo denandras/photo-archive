@@ -15,18 +15,16 @@
 }
 
 html {
-  /* b35: iOS pull-to-refresh — a slight downward drag at the top of the page
-     silently reloaded the site from cache and every row snapped back to its
-     strip start ("it was all right, but it reset to a state"). No device-
-     detection logic exists in the site; the reload was Safari's. */
-  overscroll-behavior-y: none;
+  /* b39: pull-to-refresh RE-ENABLED per owner request (was b35: none). The
+     b35 worry (silent cache reload snapping rows to start) is acceptable now:
+     the build watchdog hard-reloads stale bundles anyway, and a fresh page
+     re-streams correctly. */
   scroll-behavior: auto;
 }
 
 body {
   background: var(--bg);
   color: var(--fg);
-  overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
 }
 

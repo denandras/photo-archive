@@ -2,6 +2,7 @@ import { loadManifest } from "@/lib/manifest";
 import Gallery from "@/components/Gallery";
 import { SiteHeader } from "@/components/Header";
 import { SiteFooter } from "@/components/Footer";
+import BuildWatchdog from "@/components/BuildWatchdog";
 
 type GalleryPhoto = {
   src: string; // thumbnail (small, fast)
