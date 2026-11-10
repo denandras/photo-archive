@@ -114,7 +114,7 @@ function LightboxStage({ photo }: { photo: Photo }) {
 
   const markLoaded = useCallback((i: number) => {
     setSlots(prev => {
-      if (prev[i]?.loaded) return prev;
+      if (prev[i]?.loaded || !prev[i]?.photo) return prev; // b42: guard cleared slots
       const next = prev.map((s, j) => (j === i ? { ...s, loaded: true } : s));
       if (incomingRef.current !== i) return next;
       // incoming arrived while swapping: reverse the outgoing underneath
@@ -176,7 +176,14 @@ function LightboxStage({ photo }: { photo: Photo }) {
                 draggable={false}
                 onLoad={() => markLoaded(i)}
                 ref={(el) => {
-                  if (el && el.complete && el.naturalWidth > 0) markLoaded(i);
+                  /* b42: CACHED fulls are complete synchronously — flipping
+                     loaded during the first paint skips the b14 start state
+                     entirely and the photo just pops in with no animation
+                     ("the new one just opens"). Double-rAF so the converged
+                     corners + center-point clip paint FIRST, then expand. */
+                  if (el && el.complete && el.naturalWidth > 0) {
+                    requestAnimationFrame(() => requestAnimationFrame(() => markLoaded(i)));
+                  }
                 }}
               />
               <span className="corner lt-tl" />
@@ -585,13 +592,34 @@ export default function Gallery({
     meta: { year: string; day: string };
   } | null>(null);
   const [mounted, setMounted] = useState(false);
+  /* b42: lightbox CLOSING animation — the open choreography's exact inverse
+     (overlay fades, loaded image collapses to the center point, corners
+     converge). The overlay stays mounted ~700ms, then unmounts. */
+  const [lbClosing, setLbClosing] = useState(false);
+  const lbCloseTimer = useRef<number | null>(null);
+  const closeLightbox = useCallback(() => {
+    if (lbCloseTimer.current) return; // already closing
+    setLbClosing(true);
+    lbCloseTimer.current = window.setTimeout(() => {
+      lbCloseTimer.current = null;
+      setLbClosing(false);
+      setLightbox(null);
+    }, 700);
+  }, []);
 
   useEffect(() => setMounted(true), []);
 
   const openLightbox = useCallback(
     (photos: Photo[], index: number, meta: { year: string; day: string }) => {
+      // b42: reopening while a close animation is still running cancels it
+      if (lbCloseTimer.current) {
+        clearTimeout(lbCloseTimer.current);
+        lbCloseTimer.current = null;
+        setLbClosing(false);
+      }
       setLightbox({ photos, index, meta });
-    }, []
+    },
+    []
   );
 
   // Permalinks: ?y=YEAR[&d=YYYY-MM-DD[&i=filename.jpg]] preselect a year,
@@ -626,7 +654,7 @@ export default function Gallery({
   useEffect(() => {
     if (!lightbox) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setLightbox(null);
+      if (e.key === "Escape") closeLightbox();
       else if (e.key === "ArrowLeft")
         setLightbox((p) => (p && p.index > 0 ? { ...p, index: p.index - 1 } : p));
       else if (e.key === "ArrowRight")
@@ -640,7 +668,7 @@ export default function Gallery({
       window.removeEventListener("keydown", handler);
       document.body.style.overflow = "";
     };
-  }, [lightbox]);
+  }, [lightbox, closeLightbox]);
 
   // Mobile: a discrete horizontal flick acts exactly like an arrow key —
   // one step per gesture, no continuous drag/scroll mechanic (b22). The
@@ -675,8 +703,8 @@ export default function Gallery({
       {mounted && lightbox &&
         createPortal(
           <div
-            className="lightbox"
-            onClick={() => setLightbox(null)}
+            className={`lightbox${lbClosing ? " closing" : ""}`}
+            onClick={closeLightbox}
             onContextMenu={(e) => e.preventDefault()}
             onTouchStart={(e) => {
               const t = e.touches[0];
@@ -743,7 +771,7 @@ export default function Gallery({
                 className="lightbox-close"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setLightbox(null);
+                  closeLightbox();
                 }}
                 aria-label="Close"
               >

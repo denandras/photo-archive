@@ -473,6 +473,35 @@ header, footer, .year-header {
   .lb-inner .lightbox-img { transition: none; }
 }
 
+/* b42: closing choreography — the b14 open's exact inverse: overlay fades,
+   the loaded image collapses back to the center point, corners converge.
+   The overlay itself is unmounted by the timer in closeLightbox (~700ms). */
+.lightbox {
+  transition: opacity 0.68s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lightbox.closing {
+  opacity: 0;
+  pointer-events: none;
+}
+.lightbox.closing .lb-inner .lightbox-img {
+  clip-path: inset(49.6% 49.6% 49.6% 49.6%);
+  opacity: 0;
+  transition: clip-path 0.68s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.45s ease;
+}
+.lightbox.closing .lb-inner .corner {
+  opacity: 0;
+}
+.lightbox.closing .lb-inner .corner.lt-tl { top: calc(50% - 11px); left: calc(50% - 11px); }
+.lightbox.closing .lb-inner .corner.lt-tr { top: calc(50% - 11px); right: calc(50% - 11px); }
+.lightbox.closing .lb-inner .corner.lt-bl { bottom: calc(50% - 11px); left: calc(50% - 11px); }
+.lightbox.closing .lb-inner .corner.lt-br { bottom: calc(50% - 11px); right: calc(50% - 11px); }
+@media (prefers-reduced-motion: reduce) {
+  .lightbox,
+  .lightbox.closing .lb-inner .lightbox-img,
+  .lightbox.closing .lb-inner .corner { transition: none; }
+}
+
 .lightbox-close {
   position: absolute;
   top: 1rem;
