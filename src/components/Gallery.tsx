@@ -210,31 +210,37 @@ function ScrollRow({
   onOpen: (index: number) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef<number>(0);
+  /* b44 WINDOWED RING: the huge max-content track is GONE. What remains is a
+     zero-width group element whose COMPOSITED LAYER covers only the painted
+     window (viewport + LOAD_MARGIN on both sides ≈ ~2.7k CSS px — far under
+     Metal's 16,384-device-px texture ceiling that killed the iPhone rows).
+     Instances are repositioned only when coverage re-syncs (rare); between
+     re-syncs every instance rides rigidly with ONE per-frame transform write
+     on the group ⇒ GPU-composited 60fps smoothness (the b40 motion the user
+     wants back) with a small, bounded layer (no b41 tap-deadness). */
+  const stripRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef(0);
   const isDragging = useRef(false);
   const dragMoved = useRef(false);
   const lastX = useRef(0);
   const startX = useRef(0);
-  const initPhase = useRef(false); // start-phase applied once (mirrored rows)
-  const posRef = useRef(0); // px offset into the first copy [0..half)
-  const halfRef = useRef(0); // cached copy (period) width
-  const repsRef = useRef(3); // current copy count (must reach setReps when grown)
-  const repsCheck = useRef(0); // frame counter for cheap periodic re-measure
+  const posRef = useRef(0); // continuous position (px, unbounded — no wrap jump)
   const velRef = useRef(0); // drag inertia, px/frame
   const velSamples = useRef<number[]>([]);
   const speedRef = useRef(direction === "left" ? 0.35 : -0.35);
-  const [reps, setReps] = useState(3); // copies rendered; grows to cover the viewport
-  /* b31: in-range photo indices, computed from the marquee math (NOT IO —
-     the rows' overflow clips defeat IO margins entirely). Keyed by index
-     within one copy; every replica uses the same mapping. */
-  const spansRef = useRef<{ l: number; r: number }[] | null>(null); // first-copy card spans
-  const latchedRef = useRef<Set<number>>(new Set()); // b37: indices that keep src forever
+  const pSyncRef = useRef(0); // position anchor of the last coverage re-sync
+  const halfRef = useRef(0);
+  const measured = useRef(false);
+  const spansRef = useRef<{ l: number; r: number }[] | null>(null);
+  const latchedRef = useRef<Set<number>>(new Set());
   const inRangeRef = useRef<Set<number>>(new Set());
   const [inRange, setInRangeState] = useState<Set<number>>(new Set());
-  const lastPaintRef = useRef(-1); // b41: skip transform writes for sub-pixel moves
-  const bandCheckRef = useRef(0); // b41: throttle the per-frame rect read
-  const bandVisibleRef = useRef(true); // cached ±900 vertical-band verdict
+  const [poolK, setPoolK] = useState(2); // instances per index (coverage tiles)
+  const poolKRef = useRef(2);
+  const inBandRef = useRef(true);
+  const bandCheckRef = useRef(0);
+  const initPhase = useRef(false);
+
   // setState only when the set actually changes (rAF loop calls every frame)
   const setInRange = useCallback((next: Set<number>) => {
     const prev = inRangeRef.current;
@@ -243,176 +249,169 @@ function ScrollRow({
     setInRangeState(next);
   }, []);
 
-  // One period = one copy's width (its box includes the trailing 14px pad, so
-  // copies tile seamlessly with the same gap as inside a copy). 0 while the
-  // section is collapsed or off-screen (content-visibility).
-  const measureHalf = useCallback(() => {
-    const track = trackRef.current;
-    if (!track) return 0;
-    const copy = track.firstElementChild as HTMLElement | null;
-    if (!copy) return 0;
-    return Math.max(0, copy.getBoundingClientRect().width);
+  /* Measure card spans from the DOM. Images carry width/height + aspect-ratio,
+     so widths are laid out before any bytes load. */
+  const measure = useCallback((): boolean => {
+    const strip = stripRef.current;
+    const vp = viewportRef.current;
+    if (!strip || !vp) return false;
+    const nP = photos.length;
+    if (!nP) return false;
+    const kids = strip.children;
+    if (!kids.length) return false;
+    const first = kids[0] as HTMLElement;
+    if (!first.offsetWidth || first.offsetWidth < 8) return false; // layout not ready
+    const spans: { l: number; r: number }[] = [];
+    let x = 0;
+    for (let i = 0; i < nP; i++) {
+      const el = kids[i * poolKRef.current] as HTMLElement; // instance 0
+      const w = el.offsetWidth;
+      if (!w || w < 8) return false; // collapsed or mid-init
+      spans.push({ l: x, r: x + w });
+      x += w + 14; // inter-card gap == trailing pad (b38 invariant)
+    }
+    const half = x;
+    if (half <= 100) return false;
+    // Enough instances to cover viewport + full load band, one tile to spare
+    const vw = vp.clientWidth;
+    const need = Math.ceil((vw + 2 * LOAD_MARGIN) / half) + 1;
+    if (need > poolKRef.current && poolKRef.current < 6) {
+      poolKRef.current = Math.min(6, need);
+      setPoolK(poolKRef.current);
+      spansRef.current = null;
+      return false; // re-rendered pool gets measured on the next frames
+    }
+    const K = poolKRef.current;
+    if (K * Math.round(half) < vw + 2 * LOAD_MARGIN) return false; // still short
+    spansRef.current = spans;
+    halfRef.current = half;
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos.length]);
+
+  /* b44 wave: reposition every instance so coverage [−M, −M + K·half) lines up
+     with the current position, then anchor the group transform here. Between
+     waves all instances ride rigidly on the group transform. Continuity at
+     wave boundaries: instance (i, j) always hands over to instance (i, j±1) —
+     the SAME photo, so the handover is pixel-identical. */
+  const syncWave = useCallback(() => {
+    const strip = stripRef.current;
+    const spans = spansRef.current;
+    const half = halfRef.current;
+    if (!strip || !spans || !half) return;
+    const stripEl = strip as HTMLElement;
+    const kids = stripEl.children;
+    const K = poolKRef.current;
+    const p = posRef.current;
+    for (let i = 0; i < spans.length; i++) {
+      const base = spans[i].l;
+      const x0 = ((((base - p + LOAD_MARGIN) % half) + half) % half) - LOAD_MARGIN;
+      for (let j = 0; j < K; j++) {
+        (kids[i * K + j] as HTMLElement).style.transform = `translate3d(${x0 + j * half}px, 0, 0)`;
+      }
+    }
+    pSyncRef.current = p;
+    stripEl.style.transform = "translate3d(0px, 0, 0)";
   }, []);
 
-  const render = useCallback(() => {
-    const track = trackRef.current;
-    if (!track) return;
-    let half = halfRef.current;
-    if (half <= 0) {
-      half = measureHalf();
-      if (half <= 100) return; // not measurable / collapsed / mid-init layout
-      halfRef.current = half;
-    }
-    // Always keep pos in [0..half) — seamless in both directions
-    let p = posRef.current % half;
-    if (p < 0) p += half;
-    if (!initPhase.current) {
-      // Mirrored start: left-streaming rows begin with the strip's start just
-      // off the right edge, so photos stream right-to-left ("begin from the
-      // right, load to the left"); right-streaming rows start at the left edge.
-      initPhase.current = true;
-      if (direction === "left") {
-        const viewport = viewportRef.current;
-        const vw = viewport ? viewport.clientWidth : 0;
-        p = ((half - vw) % half + half) % half;
-        posRef.current = p;
+  const tick = useCallback(
+    (now: number) => {
+      const vp = viewportRef.current;
+      const strip = stripRef.current;
+      if (!vp || !strip) {
+        rafRef.current = requestAnimationFrame(tick);
+        return;
       }
-    }
-    posRef.current = p;
-    /* b41: 2D transform ONLY — translate3d/translateZ is ITSELF a layer
-       promotion in WebKit: with will-change gone, a 3D matrix would still
-       hand the whole max-content track to the compositor and hit Metal's
-       16,384-device-px texture ceiling (⇒ iPhone rows paint blank then
-       "die"). 2D translateX paints through the tiled main-thread path.
-
-       b41b: main-thread painting must stay CHEAP or iOS gets tap-dead
-       (12 strips repainted every frame starve the event loop). The marquee
-       moves ~0.35px/frame — write the transform only when ~1.25px have
-       accumulated (≈15Hz instead of 60Hz), or during drags/inertia when
-       movement per frame is larger anyway. Motion stays sub-pixel-smooth;
-       latching below is position-based and unaffected. */
-    const moved = Math.abs(p - (lastPaintRef.current < 0 ? p : lastPaintRef.current));
-    const shouldPaint = lastPaintRef.current < 0 || moved >= 1.25 || isDragging.current;
-    const paint = () => {
-      lastPaintRef.current = p;
-      track.style.transform = `translateX(${-p}px)`;
-    };
-    if (shouldPaint) paint();
-
-    // b31: derive which cards are in load range from the marquee math —
-    // direction-symmetric, clip-proof (IO margins are defeated by the rows'
-    // overflow clipping, so IO can't do this job at all).
-    // b41b: the rect read happens every ~10th frame; between checks the last
-    // verdict (±900 band) is reused. Scrolling still triggers prompt checks
-    // because scroll changes land within a frame or two of the next read.
-    const viewport = viewportRef.current;
-    if (viewport && (++bandCheckRef.current % 10 === 0 || !spansRef.current)) {
-      const rc = viewport.getBoundingClientRect();
-      bandVisibleRef.current = rc.bottom > -V_BAND && rc.top < innerHeight + V_BAND;
-    }
-    if (viewport && bandVisibleRef.current) {
-        if (!spansRef.current) {
-          const copy = track.firstElementChild;
-          if (copy) {
-            spansRef.current = [...copy.children].map((c) => {
-              const el = c as HTMLElement;
-              const l = el.offsetLeft; // layout space — transform-proof
-              return { l, r: l + el.offsetWidth };
-            });
+      const dt = Math.min(3, Math.max(0.25, (now - (lastFrameRef.current || now)) / 16.7));
+      lastFrameRef.current = now;
+      // Vertical band, rechecked every ~10th frame (cheap: one rect read)
+      if (++bandCheckRef.current % 10 === 0 || !measured.current) {
+        const rc = vp.getBoundingClientRect();
+        inBandRef.current = rc.bottom > -V_BAND && rc.top < innerHeight + V_BAND;
+        if (inBandRef.current && !measured.current) {
+          measured.current = measure();
+          if (measured.current && !initPhase.current) {
+            // Mirrored start (b10): left-streaming rows begin with the strip's
+            // END at the right edge. Continuous position = (half − vw).
+            initPhase.current = true;
+            if (direction === "left") {
+              posRef.current = halfRef.current - vp.clientWidth;
+            }
+            pSyncRef.current = posRef.current;
           }
         }
+      }
+      if (inBandRef.current && measured.current) {
+        if (!isDragging.current) {
+          if (Math.abs(velRef.current) > 0.02) {
+            posRef.current += velRef.current * dt;
+            velRef.current *= Math.pow(0.94, dt);
+          } else {
+            velRef.current = 0;
+            posRef.current += speedRef.current * dt;
+          }
+        }
+        const drift = posRef.current - pSyncRef.current;
+        const half = halfRef.current;
         const spans = spansRef.current;
-        if (spans && spans.length > 0) {
-          const vw = viewport.clientWidth;
-          const needed = Math.min(
-            10,
-            Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN) / half) + 2)
-          );
-          // grow-only (b35): bidirectional resizing let a jittery re-measure
-          // flap the copy count and read as a "reset" — growth is capped, so
-          // leaving stale extra copies is harmless
-          if (needed > repsRef.current) {
-            repsRef.current = needed;
-            setReps(needed);
+        if (spans) {
+          // ONE per-frame write: the group transform (compositor-smooth)
+          if (Math.abs(drift - (lastDriftRef.current ?? 0)) >= 0.01 || !lastDriftRef.current) {
+            lastDriftRef.current = drift;
+            strip.style.transform = `translate3d(${-drift}px, 0, 0)`;
           }
-          // b37 LATCH: once an index has been in range, it NEVER leaves —
-          // removing src unloads the bitmap and pops it back on re-entry
-          // (the "dragging makes it flashy" report, confirmed by phone CDP:
-          // src counts flapped 22/23 → 22/22 → 23/23 while idle). The set
-          // only ever grows, bounded by photos-per-day per row.
-          const next = new Set(latchedRef.current);
-          for (let c = 0; c < repsRef.current; c++) {
-            const cOff = c * half;
+          // coverage guard: re-sync before any instance leaves the coverage
+          if (Math.abs(drift) > half / 2) syncWave();
+          // Latch: index i is latched when its instance chain overlaps
+          // [−LOAD_MARGIN, vw + LOAD_MARGIN] (O(1) per index — K tiles are
+          // consecutive, so the chain is a contiguous interval).
+          const vw = vp.clientWidth;
+          const driftNow = posRef.current - pSyncRef.current;
+          const K = poolKRef.current;
+          const lastI = spans.length - 1;
+          const chainRight = spans[lastI].l + (K - 1) * half - driftNow;
+          if (chainRight > -LOAD_MARGIN && spans[0].l - driftNow < vw + LOAD_MARGIN) {
+            const next = new Set(latchedRef.current);
             for (let i = 0; i < spans.length; i++) {
-              const l = spans[i].l + cOff - p;
-              const r = spans[i].r + cOff - p;
-              if (r > -LOAD_MARGIN && l < vw + LOAD_MARGIN) next.add(i);
+              const l = spans[i].l - driftNow;
+              if (l < vw + LOAD_MARGIN && l + (K - 1) * half + (spans[i].r - spans[i].l) > -LOAD_MARGIN) {
+                next.add(i);
+              }
             }
+            latchedRef.current = next;
+            setInRange(next);
           }
-          latchedRef.current = next;
-          setInRange(next);
-          return;
         }
       }
-    // Out-of-band rows only repaint (no latching) — same cheapness guard.
-    if (shouldPaint) paint();
-  }, [measureHalf, setInRange]);
+      rafRef.current = requestAnimationFrame(tick);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [measure, syncWave]
+  );
 
-  // Marquee loop via rAF + transform (compositor-friendly, works on iOS)
+  const lastFrameRef = useRef(0);
+  const lastDriftRef = useRef<number | null>(null);
+
   useEffect(() => {
-    let last = performance.now();
-    const animate = (now: number) => {
-      const dt = Math.min(3, Math.max(0.25, (now - last) / 16.7)); // ~1 at 60Hz
-      last = now;
-      // Ensure enough copies cover the viewport with a full period to spare
-      // ("real endlessness"): needed = ceil(vw/half) + 1. Checked cheaply
-      // every ~2s and whenever the cached period is re-measured.
-      if (++repsCheck.current >= 120 && !isDragging.current) {
-        repsCheck.current = 0;
-        halfRef.current = 0; // re-measure (images may have resized copies)
-        spansRef.current = null;
-        const track = trackRef.current;
-        const viewport = viewportRef.current;
-        if (track && viewport) {
-          const half = measureHalf();
-          if (half > 0 && half > 100) {
-            const vw = viewport.clientWidth;
-            // Same coverage formula as the eager path in render(): viewport +
-            // the load band on both sides + the left base shift
-            const B = Math.ceil(LOAD_MARGIN / half) * half;
-            const needed = Math.min(
-              8,
-              Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
-            );
-            // grow-only, mirrors the eager path (b35)
-            if (needed > repsRef.current) {
-              repsRef.current = needed;
-              setReps(needed);
-            }
-          }
-        }
-      }
-      if (!isDragging.current) {
-        if (Math.abs(velRef.current) > 0.02) {
-          // inertia from the last drag, decaying
-          posRef.current += velRef.current * dt;
-          velRef.current *= Math.pow(0.94, dt);
-        } else {
-          velRef.current = 0;
-          posRef.current += speedRef.current * dt;
-        }
-        render();
-      }
-      rafRef.current = requestAnimationFrame(animate);
+    lastFrameRef.current = 0;
+    rafRef.current = requestAnimationFrame((t) => tick(t));
+    const onResize = () => {
+      measured.current = false;
+      spansRef.current = null;
     };
-    rafRef.current = requestAnimationFrame(animate);
-    const onResize = () => { halfRef.current = 0; spansRef.current = null; };
     window.addEventListener("resize", onResize);
     return () => {
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener("resize", onResize);
     };
-  }, [render]);
+  }, [tick]);
+
+  /* Force a re-sync after the pool grows (new children carry default
+     transforms); the tick loop measures on the next frames anyway. */
+  useEffect(() => {
+    if (measured.current && spansRef.current) syncWave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poolK]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     isDragging.current = true;
@@ -423,7 +422,6 @@ function ScrollRow({
     startX.current = e.clientX;
     const viewport = viewportRef.current;
     if (viewport) {
-      // Capture may throw NotFoundError (pointer already gone / buggy iOS)
       try { viewport.setPointerCapture(e.pointerId); } catch {}
       viewport.style.cursor = "grabbing";
     }
@@ -440,8 +438,7 @@ function ScrollRow({
     posRef.current -= dx;
     velSamples.current.push(-dx);
     if (velSamples.current.length > 6) velSamples.current.shift();
-    render();
-  }, [render]);
+  }, []);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (!isDragging.current) return;
@@ -451,14 +448,10 @@ function ScrollRow({
       try { viewport.releasePointerCapture?.(e.pointerId); } catch {}
       viewport.style.cursor = "";
     }
-    // Release inertia: average of recent per-event deltas
     const s = velSamples.current.slice(-6);
     velRef.current = s.length ? s.reduce((a, b) => a + b, 0) / s.length : 0;
     velSamples.current = [];
-    // Keep dragMoved true briefly so a trailing click can check it
     setTimeout(() => { dragMoved.current = false; }, 250);
-    // Tap→preview: resolve the card directly from the pointer position, since
-    // pointer capture can retarget/swallow the click on touch (esp. iOS Safari)
     if (!dragMoved.current) {
       const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
       const card = el?.closest("[data-photo-idx]") as HTMLElement | null;
@@ -474,20 +467,11 @@ function ScrollRow({
     onOpen(idx);
   }, [onOpen]);
 
-  // Copies of the same sequence; count grows (never shrinks) so the track
-  // always covers viewport + one period — a drag or the marquee can never
-  // reach an end. Position wraps modulo ONE copy, so loop is seamless.
-  const copies = Array.from({ length: reps }, (_, c) => c);
-
-  // Horizontal wheel (Magic Mouse-style horizontal scroll / trackpads): drive
-  // the same JS position — the marquee position is the single source of truth.
   const handleWheel = useCallback((e: React.WheelEvent) => {
-    // Only horizontal deltas move the row; vertical deltas keep scrolling the page
     const dx = e.deltaMode === 0 ? e.deltaX : e.deltaX * (e.deltaMode === 1 ? 16 : 100);
     if (!dx) return;
     posRef.current -= dx;
-    render();
-  }, [render]);
+  }, []);
 
   return (
     <div
@@ -500,20 +484,19 @@ function ScrollRow({
       onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
     >
-      <div className="scroll-track" ref={trackRef}>
-        {copies.map((c) => (
-          <div className="scroll-copy" key={c} aria-hidden={c > 0}>
-            {photos.map((p, i) => (
-              <PhotoCard
-                key={i}
-                photo={p}
-                dataIdx={i}
-                active={inRange.has(i)}
-                onClick={() => handleCardClick(i % photos.length)}
-              />
-            ))}
-          </div>
-        ))}
+      <div className="scroll-strip" ref={stripRef}>
+        {Array.from({ length: poolK * photos.length }, (_, f) => {
+          const i = Math.floor(f / poolK);
+          return (
+            <PhotoCard
+              key={`${i}-${f % poolK}`}
+              photo={photos[i]}
+              dataIdx={i}
+              active={inRange.has(i)}
+              onClick={() => handleCardClick(i)}
+            />
+          );
+        })}
       </div>
     </div>
   );
