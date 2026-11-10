@@ -84,7 +84,13 @@ function PhotoCard({
    Swap: the incoming image stays invisible until its bytes arrive, then it
    expands on top while the outgoing reverses underneath — no frame has
    nothing on screen. Fast swipes retarget the pending slot. ===== */
-function LightboxStage({ photo }: { photo: Photo }) {
+function LightboxStage({
+  photo,
+  onBusyChange,
+}: {
+  photo: Photo;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   type SlotLb = { photo: Photo | null; loaded: boolean; above: boolean };
   const [slots, setSlots] = useState<SlotLb[]>([
     { photo, loaded: false, above: false },
@@ -94,6 +100,32 @@ function LightboxStage({ photo }: { photo: Photo }) {
   const incomingRef = useRef<number | null>(null);
   const shownRef = useRef<string | null>(null);
   const fallbackTimer = useRef<number | null>(null);
+  /* b46: busy gate — one swipe at a time. A swap is busy from (re)start to
+     finalize; setBusy(false) once settled, plus a watchdog in case the
+     incoming image never loads. Reported to the Gallery so flicks/nav during
+     a swap are ignored (rapid retargets piled up decodes → device crash,
+     and mid-swap closes fought the stage choreography). */
+  const busyRef = useRef(false);
+  const busyWatch = useRef<number | null>(null);
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  const setBusy = useCallback((b: boolean) => {
+    busyRef.current = b;
+    onBusyChangeRef.current?.(b);
+  }, []);
+  const armBusyWatch = useCallback(() => {
+    if (busyWatch.current) clearTimeout(busyWatch.current);
+    busyWatch.current = window.setTimeout(() => {
+      busyWatch.current = null;
+      setBusy(false);
+    }, 12000);
+  }, [setBusy]);
+  const clearBusyWatch = useCallback(() => {
+    if (busyWatch.current) {
+      clearTimeout(busyWatch.current);
+      busyWatch.current = null;
+    }
+  }, []);
 
   // Finalize: promoted slot becomes the background; retired slot emptied.
   const finalize = useCallback((promoted: number) => {
@@ -101,6 +133,8 @@ function LightboxStage({ photo }: { photo: Photo }) {
       clearTimeout(fallbackTimer.current);
       fallbackTimer.current = null;
     }
+    clearBusyWatch();
+    setBusy(false); // b46: swap settled — next swipe may start
     incomingRef.current = null;
     activeRef.current = promoted;
     setSlots(prev =>
@@ -110,7 +144,7 @@ function LightboxStage({ photo }: { photo: Photo }) {
           : { photo: null, loaded: false, above: false }
       )
     );
-  }, []);
+  }, [clearBusyWatch, setBusy]);
 
   const markLoaded = useCallback((i: number) => {
     setSlots(prev => {
@@ -133,6 +167,9 @@ function LightboxStage({ photo }: { photo: Photo }) {
     const first = shownRef.current === null;
     shownRef.current = photo.full;
     if (first) return;
+    // b46: swap begins — gate further swipes until it settles
+    if (incomingRef.current === null || busyRef.current) setBusy(true);
+    armBusyWatch();
     // start / retarget a swap: newest photo goes to the non-active slot, on top
     if (fallbackTimer.current) clearTimeout(fallbackTimer.current);
     setSlots(prev => {
@@ -646,6 +683,22 @@ export default function Gallery({
      converge). The overlay stays mounted ~700ms, then unmounts. */
   const [lbClosing, setLbClosing] = useState(false);
   const lbCloseTimer = useRef<number | null>(null);
+  /* b46: one swipe at a time — LightboxStage reports swap busy; flicks,
+     arrow buttons and keys are ignored until the current swap settles.
+     Rapid retargets piled up full-size decodes (device crash) and mid-swap
+     closes fought the swap choreography (bad close animation). */
+  const lbBusyRef = useRef(false);
+  const handleLbBusy = useCallback((b: boolean) => {
+    lbBusyRef.current = b;
+  }, []);
+  const stepLightbox = useCallback((dir: 1 | -1) => {
+    if (lbBusyRef.current) return;
+    setLightbox((p) => {
+      if (!p) return p;
+      if (dir < 0) return p.index < p.photos.length - 1 ? { ...p, index: p.index + 1 } : p;
+      return p.index > 0 ? { ...p, index: p.index - 1 } : p;
+    });
+  }, []);
   const closeLightbox = useCallback(() => {
     if (lbCloseTimer.current) return; // already closing
     setLbClosing(true);
@@ -704,12 +757,8 @@ export default function Gallery({
     if (!lightbox) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeLightbox();
-      else if (e.key === "ArrowLeft")
-        setLightbox((p) => (p && p.index > 0 ? { ...p, index: p.index - 1 } : p));
-      else if (e.key === "ArrowRight")
-        setLightbox((p) =>
-          p && p.index < p.photos.length - 1 ? { ...p, index: p.index + 1 } : p,
-        );
+      else if (e.key === "ArrowLeft") stepLightbox(1);
+      else if (e.key === "ArrowRight") stepLightbox(-1);
     };
     window.addEventListener("keydown", handler);
     document.body.style.overflow = "hidden";
@@ -717,7 +766,7 @@ export default function Gallery({
       window.removeEventListener("keydown", handler);
       document.body.style.overflow = "";
     };
-  }, [lightbox, closeLightbox]);
+  }, [lightbox, closeLightbox, stepLightbox]);
 
   // Mobile: a discrete horizontal flick acts exactly like an arrow key —
   // one step per gesture, no continuous drag/scroll mechanic (b22). The
@@ -756,13 +805,14 @@ export default function Gallery({
             onClick={closeLightbox}
             onContextMenu={(e) => e.preventDefault()}
             onTouchStart={(e) => {
+              if (lbClosing || lbBusyRef.current) return; // b46: one swipe at a time
               const t = e.touches[0];
               touchStart.current = { x: t.clientX, y: t.clientY, t: Date.now() };
             }}
             onTouchEnd={(e) => {
               const s = touchStart.current;
               touchStart.current = null;
-              if (!s) return;
+              if (!s || lbClosing || lbBusyRef.current) return; // b46: gated
               const t = e.changedTouches[0];
               const dx = t.clientX - s.x;
               const dy = t.clientY - s.y;
@@ -771,20 +821,13 @@ export default function Gallery({
               if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
               if (Date.now() - s.t > 700) return;
               e.stopPropagation();
-              setLightbox((p) => {
-                if (!p) return p;
-                if (dx < 0)
-                  return p.index < p.photos.length - 1
-                    ? { ...p, index: p.index + 1 }
-                    : p;
-                return p.index > 0 ? { ...p, index: p.index - 1 } : p;
-              });
+              stepLightbox(dx < 0 ? -1 : 1);
             }}
           >
             {/* Safe-viewport box: sits between the iOS browser bars, which
                 overlap plain fixed/vh sizes — top AND bottom were cut. */}
             <div className="lightbox-fit">
-              <LightboxStage photo={lightbox.photos[lightbox.index]} />
+              <LightboxStage photo={lightbox.photos[lightbox.index]} onBusyChange={handleLbBusy} />
               {lightbox.photos.length > 1 && (
                 <>
                   <span className="lightbox-counter">
@@ -795,7 +838,7 @@ export default function Gallery({
                       className="lightbox-nav lightbox-prev"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setLightbox((p) => (p ? { ...p, index: p.index - 1 } : p));
+                        stepLightbox(1);
                       }}
                       aria-label="Previous"
                     >
@@ -807,7 +850,7 @@ export default function Gallery({
                       className="lightbox-nav lightbox-next"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setLightbox((p) => (p ? { ...p, index: p.index + 1 } : p));
+                        stepLightbox(-1);
                       }}
                       aria-label="Next"
                     >
