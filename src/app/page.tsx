@@ -57,6 +57,7 @@ export default async function Page() {
 
   return (
     <main className="min-h-screen bg-black text-white overflow-x-hidden">
+      <BuildWatchdog />
       <SiteHeader />
       <div className="px-4 pb-32">
         {hasPhotos ? (
