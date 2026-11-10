@@ -71,11 +71,12 @@ body {
   left: 0;
   top: 0;
   height: 160px;
-  overflow: hidden;
+  /* b49b: NOT overflow:hidden / contain:paint — the hover pop scales an inner
+     wrapper beyond the card box; clipping there would cut the pop short. */
   background: #0a0a0a;
-  contain: layout style paint;
+  contain: layout style;
   /* NO transform transition: the transform IS the ring position (JS-set);
-     the hover pop rides the independent scale property. */
+     the hover pop rides the inner wrapper's transform instead. */
   cursor: pointer;
 }
 
@@ -99,13 +100,21 @@ body {
     z-index: 30;
   }
   .photo-card:hover {
-    /* b44: pop uses the independent `scale` property (NOT transform) —
-       the instance's transform carries the ring-position and is set by JS;
-       transitioning transform there would visibly slide wave repositionings. */
-    scale: 1.2;
     z-index: 20;
-    transition: scale 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-                z-index 0s 0s;
+  }
+  /* b49b: pop on an INNER wrapper — scaling the card element itself composes
+     with the JS instance transform (scale outermost ⇒ 20% of the translation
+     distance added: cards drifted more and more from their true row spot the
+     further they sat from the first card). The wrapper's box is card-local,
+     so its scale stays centered on the card. */
+  .photo-card .card-body {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .photo-card:hover .card-body {
+    transform: scale(1.2);
     box-shadow: 0 20px 60px -10px rgba(0, 0, 0, 0.8),
                 0 0 0 1px rgba(255, 255, 255, 0.1);
   }

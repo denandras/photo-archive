@@ -61,20 +61,25 @@ function PhotoCard({
       onClick={onClick}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={active ? photo.src : undefined}
-        alt=""
-        width={photo.w}
-        height={photo.h}
-        decoding="async"
-        draggable={false}
-        onLoad={flip}
-      />
-      <span className="corner tl" />
-      <span className="corner tr" />
-      <span className="corner bl" />
-      <span className="corner br" />
+      {/* b49b: inner wrapper carries the hover scale — the card element itself
+          holds the JS ring transform, and a scale THERE composes with the
+          translation (offset grew with distance from the first card). */}
+      <div className="card-body">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={active ? photo.src : undefined}
+          alt=""
+          width={photo.w}
+          height={photo.h}
+          decoding="async"
+          draggable={false}
+          onLoad={flip}
+        />
+        <span className="corner tl" />
+        <span className="corner tr" />
+        <span className="corner bl" />
+        <span className="corner br" />
+      </div>
     </div>
   );
 }
@@ -99,6 +104,7 @@ function LightboxStage({
 }) {
   type SlotLb = {
     photo: Photo | null;
+    attempt: number; // b49b: 0 = first request, 1 = one cache-busted retry
     revealed: boolean; // its close phase finished; visible from now on
     bytes: boolean; // full image loaded (may still be hidden)
     loaded: boolean; // expansion choreography running/done
@@ -106,8 +112,8 @@ function LightboxStage({
     hidden: boolean; // preloading invisibly during the outgoing close
   };
   const [slots, setSlots] = useState<SlotLb[]>([
-    { photo, revealed: true, bytes: false, loaded: false, above: true, hidden: false },
-    { photo: null, revealed: true, bytes: false, loaded: false, above: false, hidden: false },
+    { photo, attempt: 0, revealed: true, bytes: false, loaded: false, above: true, hidden: false },
+    { photo: null, attempt: 0, revealed: true, bytes: false, loaded: false, above: false, hidden: false },
   ]);
   const activeRef = useRef(0);
   const incomingRef = useRef<number | null>(null);
@@ -151,30 +157,87 @@ function LightboxStage({
     setBusy(false);
   }, [setBusy]);
 
-  // Phase B: reveal the incoming slot — expansion choreography starts here
-  // (loaded flips immediately if its bytes already arrived while hidden).
-  const revealIncoming = useCallback(() => {
+  /* b49b: at close-end the outgoing slot FOLDS away unconditionally — its
+     converged corner marks must never linger at the middle while the next
+     image opens ("it should feel like one model opening"). The incoming
+     slot is revealed ONLY when its bytes are present (markLoaded), so no
+     empty converged box ever shows. Until then the stage sits empty. */
+  const revealTimerFired = useRef(false); // phase A concluded
+  const doFold = useCallback(() => {
     const i = incomingRef.current;
     if (i === null) return;
+    revealTimerFired.current = true;
     setSlots(prev =>
-      prev.map((s, j) => (j === i ? { ...s, revealed: true, hidden: false, loaded: s.bytes } : s))
+      prev.map((s, j) => {
+        if (j === i) {
+          // bytes already arrived while hidden: expand now
+          return s.bytes ? { ...s, revealed: true, hidden: false, loaded: true } : s;
+        }
+        return s.photo ? { ...s, photo: null } : s; // fold the closed outgoing
+      })
     );
+    if (inBytes.current) scheduleSettle(i);
   }, []);
 
-  const markLoaded = useCallback((i: number) => {
-    setSlots(prev => {
-      const s = prev[i];
-      if (!s?.photo || s.bytes) return prev;
-      const next = prev.map((x, j) => (j === i ? { ...x, bytes: true } : x));
-      if (next[i].revealed) next[i] = { ...next[i], loaded: true };
-      return next;
-    });
-    // settle after the expansion choreography (~0.95s), then finalize
+  const inBytes = useRef(false); // incoming's bytes arrived during preload
+  const attemptRef = useRef(0); // 0 = initial request, 1 = one retry
+
+  const scheduleSettle = useCallback((i: number) => {
     if (settleTimer.current) clearTimeout(settleTimer.current);
     settleTimer.current = window.setTimeout(() => {
       if (incomingRef.current === i) finalize(i);
     }, 950);
   }, [finalize]);
+
+  const markLoaded = useCallback((i: number) => {
+    /* b50: the INITIAL open (slot === activeRef, no swap running) never
+       went through a fold — revealTimerFired is false there, which froze
+       the opening image at the converged middle forever. Distinguish:
+       initial open reveals immediately; a swap's incoming waits for doFold. */
+    const initialOpen = incomingRef.current === null && i === activeRef.current;
+    const wasFoldDone = revealTimerFired.current;
+    setSlots(prev => {
+      const s = prev[i];
+      if (!s?.photo || s.bytes) return prev;
+      const next = prev.map((x, j) => (j === i ? { ...x, bytes: true } : x));
+      if (wasFoldDone || initialOpen)
+        next[i] = { ...next[i], revealed: true, hidden: false, loaded: true };
+      return next;
+    });
+    if (initialOpen) return; // no fold/settle choreography on the first open
+    inBytes.current = true;
+    // reveal happens now if phase A already concluded (doFold handles the
+    // case where bytes beat the fold); then settle after the expansion.
+    if (wasFoldDone) {
+      scheduleSettle(i);
+    } else {
+      // fold timer is still pending — it will reveal; clear any stale settle
+      if (settleTimer.current) {
+        clearTimeout(settleTimer.current);
+        settleTimer.current = null;
+      }
+    }
+  }, [scheduleSettle]);
+
+  /* b49b: full failed to arrive — one cache-busted retry, then give the slot
+     up (empty stage; gate released so the user can swipe onward). */
+  const handleLoadError = useCallback((i: number) => {
+    if (incomingRef.current !== i) return;
+    if (attemptRef.current === 0) {
+      attemptRef.current = 1;
+      setTimeout(() => {
+        setSlots(prev =>
+          prev.map((s, j) => (j === i && s.photo && !s.bytes ? { ...s, attempt: 1 } : s))
+        );
+      }, 1200);
+      return;
+    }
+    // second failure: drop the unseen preload, release the gate
+    incomingRef.current = null;
+    setSlots(prev => prev.map((s, j) => (j === i ? { ...s, photo: null, bytes: false } : s)));
+    setBusy(false);
+    if (busyWatch.current) { clearTimeout(busyWatch.current); busyWatch.current = null; }
+  }, [setBusy]);
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 
@@ -198,22 +261,26 @@ function LightboxStage({
     const first = shownRef.current === null;
     shownRef.current = photo.full;
     if (first || closing) return;
-    // b48 SERIAL swap begins: close the old, preload the new invisibly.
+    // b49b SERIAL swap begins: close the old, preload the new invisibly.
     clearTimers();
     setBusy(true);
     armBusyWatch();
+    inBytes.current = false;
+    attemptRef.current = 0;
+    revealTimerFired.current = false;
     const target = 1 - activeRef.current;
     incomingRef.current = target;
     setSlots(prev =>
       prev.map((s, j) =>
         j === target
-          ? { photo, revealed: false, bytes: false, loaded: false, above: true, hidden: true }
-          : { ...s, above: false, loaded: false } // outgoing closes now
+          ? { photo, attempt: 0, revealed: false, bytes: false, loaded: false, above: true, hidden: true }
+          : { ...s, attempt: 0, above: false, loaded: false } // outgoing closes now
       )
     );
-    // Phase B: once the close fully played (clip transition is 0.85s)
-    revealTimer.current = window.setTimeout(revealIncoming, 880);
-  }, [photo, closing, clearTimers, setBusy, armBusyWatch, revealIncoming]);
+    // Phase B: once the close fully played (clip transition is 0.85s), the
+    // outgoing folds away; the incoming reveals only when its bytes arrive.
+    revealTimer.current = window.setTimeout(doFold, 880);
+  }, [photo, closing, clearTimers, setBusy, armBusyWatch, doFold]);
 
   return (
     <div
@@ -230,7 +297,11 @@ function LightboxStage({
             <div className={`lb-inner${s.loaded ? " loaded" : ""}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={s.photo.full}
+                src={
+                  s.attempt > 0
+                    ? `${s.photo.full}${s.photo.full.includes("?") ? "&" : "?"}cb=${s.attempt}`
+                    : s.photo.full
+                }
                 alt=""
                 className="lightbox-img"
                 width={s.photo.w || undefined}
@@ -238,6 +309,7 @@ function LightboxStage({
                 decoding="async"
                 draggable={false}
                 onLoad={() => markLoaded(i)}
+                onError={() => handleLoadError(i)}
                 ref={(el) => {
                   /* b42: CACHED fulls are complete synchronously — flipping
                      loaded during the first paint skips the b14 start state
@@ -811,6 +883,10 @@ export default function Gallery({
   );
   const linkY = params.get("y");
 
+  // b51: auto-open the latest year on a plain load — no ?y= permalink means
+  // the newest (first in the desc-sorted list) expands on mount.
+  const defaultYear = linkY ? null : years[0]?.[0];
+
   return (
     <>
       {years.map(([year, days]) => (
@@ -820,7 +896,7 @@ export default function Gallery({
           days={days}
           onPhotoClick={openLightbox}
           anchorDay={linkY === year ? params.get("d") : null}
-          stayOpen={linkY === year}
+          stayOpen={linkY === year || defaultYear === year}
         />
       ))}
 
