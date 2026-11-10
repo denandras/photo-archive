@@ -288,11 +288,16 @@ function ScrollRow({
     return true;
   }, [photos.length]);
 
-  /* b44 wave: reposition every instance so coverage [−M, −M + K·half) lines up
-     with the current position, then anchor the group transform here. Between
-     waves all instances ride rigidly on the group transform. Continuity at
-     wave boundaries: instance (i, j) always hands over to instance (i, j±1) —
-     the SAME photo, so the handover is pixel-identical. */
+  /* b44c wave: reposition every instance so the strip tiles CONTIGUOUSLY over
+     the coverage window. Global tiling — instance (i, j) sits at
+     base_i + (nMin(i,j) + j)·half − pSync, with nMin chosen per index so the
+     first tile is in [−M, −M + half) relative to the CURRENT position. The
+     earlier per-index `mod half` anchor wrapped WIDE-period rows one period
+     behind their neighbours (left hole: "images on the left don't load
+     initially" — user, fixed on scroll because a re-sync re-measured).
+     Between waves all instances ride rigidly on the group transform; at the
+     wave boundary instance (i, j) hands over to instance (i, j±1) — the same
+     photo, pixel-identical. */
   const syncWave = useCallback(() => {
     const strip = stripRef.current;
     const spans = spansRef.current;
@@ -304,9 +309,11 @@ function ScrollRow({
     const p = posRef.current;
     for (let i = 0; i < spans.length; i++) {
       const base = spans[i].l;
-      const x0 = ((((base - p + LOAD_MARGIN) % half) + half) % half) - LOAD_MARGIN;
+      // first tile covering the window: base + n·half ∈ [−M, −M + half)
+      const nMin = Math.ceil((-LOAD_MARGIN - base + p) / half);
       for (let j = 0; j < K; j++) {
-        (kids[i * K + j] as HTMLElement).style.transform = `translate3d(${x0 + j * half}px, 0, 0)`;
+        (kids[i * K + j] as HTMLElement).style.transform =
+          `translate3d(${base - p + (nMin + j) * half}px, 0, 0)`;
       }
     }
     pSyncRef.current = p;
@@ -372,24 +379,21 @@ function ScrollRow({
           // coverage guard: re-sync before any instance leaves the coverage
           if (Math.abs(drift) > half / 2) syncWave();
           // Latch: index i is latched when its instance chain overlaps
-          // [−LOAD_MARGIN, vw + LOAD_MARGIN] (O(1) per index — K tiles are
-          // consecutive, so the chain is a contiguous interval).
+          // [−LOAD_MARGIN, vw + LOAD_MARGIN]. b44c: chain = global tiling —
+          // first tile at base_i − p + nMin(i)·half, K consecutive tiles.
           const vw = vp.clientWidth;
-          const driftNow = posRef.current - pSyncRef.current;
           const K = poolKRef.current;
-          const lastI = spans.length - 1;
-          const chainRight = spans[lastI].l + (K - 1) * half - driftNow;
-          if (chainRight > -LOAD_MARGIN && spans[0].l - driftNow < vw + LOAD_MARGIN) {
-            const next = new Set(latchedRef.current);
-            for (let i = 0; i < spans.length; i++) {
-              const l = spans[i].l - driftNow;
-              if (l < vw + LOAD_MARGIN && l + (K - 1) * half + (spans[i].r - spans[i].l) > -LOAD_MARGIN) {
-                next.add(i);
-              }
+          const next = new Set(latchedRef.current);
+          for (let i = 0; i < spans.length; i++) {
+            const base = spans[i].l;
+            const nMin = Math.ceil((-LOAD_MARGIN - base + posRef.current) / half);
+            const l = base - posRef.current + nMin * half;
+            if (l < vw + LOAD_MARGIN && l + (K - 1) * half + (spans[i].r - spans[i].l) > -LOAD_MARGIN) {
+              next.add(i);
             }
-            latchedRef.current = next;
-            setInRange(next);
           }
+          latchedRef.current = next;
+          setInRange(next);
         }
       }
       rafRef.current = requestAnimationFrame(tick);
