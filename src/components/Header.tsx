@@ -1,5 +1,3 @@
-import { BUILD_TAG } from "@/build-tag";
-
 export function SiteHeader() {
   return (
     <header className="px-6 pt-20 pb-16 md:px-12 lg:px-24 md:text-center">
@@ -7,7 +5,7 @@ export function SiteHeader() {
         András Dénes
       </h1>
       <p className="text-white/40 font-mono text-[11px] uppercase tracking-[0.2em]">
-        photo archive / Fuji X100V&nbsp;&nbsp;·&nbsp;&nbsp;{BUILD_TAG}
+        photo archive / Fuji X100V
       </p>
     </header>
   );
