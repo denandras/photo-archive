@@ -6,11 +6,10 @@ import { createPortal } from "react-dom";
 type Photo = { src: string; full: string; key: string; w: number; h: number };
 
 const DRAG_THRESHOLD = 6;
-/* Horizontal look-ahead per side, in px. b36: 2000 flooded phones — every
-   visible row prefetched ~40 thumbs both ways × 12 rows ≈ 400+ fetches on
-   cellular, the copy-count commit starved and rows rendered as plain space.
-   900 still covers a drag-flick and keeps the backward twins pre-loaded. */
-const LOAD_MARGIN = 900;
+/* Horizontal look-ahead per side, in px. b37: back to the plain band (no
+   base shift, no staging — they churned on real phones). 1200 covers drags;
+   latched loading (below) makes band edges impossible to flash. */
+const LOAD_MARGIN = 1200;
 /* Vertical band: rows compute their in-range cards only near the viewport */
 const V_BAND = 900;
 
@@ -223,12 +222,9 @@ function ScrollRow({
      the rows' overflow clips defeat IO margins entirely). Keyed by index
      within one copy; every replica uses the same mapping. */
   const spansRef = useRef<{ l: number; r: number }[] | null>(null); // first-copy card spans
-  const baseShiftRef = useRef(0); // left base offset covering the left load band
-  const committedRepsRef = useRef(3); // copies actually in the DOM (post-commit)
+  const latchedRef = useRef<Set<number>>(new Set()); // b37: indices that keep src forever
   const inRangeRef = useRef<Set<number>>(new Set());
   const [inRange, setInRangeState] = useState<Set<number>>(new Set());
-  // sync the committed copy count after each React commit
-  useEffect(() => { committedRepsRef.current = reps; }, [reps]);
   // setState only when the set actually changes (rAF loop calls every frame)
   const setInRange = useCallback((next: Set<number>) => {
     const prev = inRangeRef.current;
@@ -296,15 +292,9 @@ function ScrollRow({
         const spans = spansRef.current;
         if (spans && spans.length > 0) {
           const vw = viewport.clientWidth;
-          // True infinity (b33): the DOM copies must ALWAYS cover the whole
-          // load band on BOTH sides of the window, at every p in [0, half).
-          // Base-shift B pushes the strip one margin-width left, so territory
-          // exists to the left of layout-0 and dragging backward always has
-          // something to reveal. Copies needed = (vw + 2M + B) / half + 1.
-          const B = Math.ceil(LOAD_MARGIN / half) * half;
           const needed = Math.min(
-            8, // hard cap (b36 was 12): fewer copies = lighter DOM commit
-            Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN + B) / half) + 1)
+            10,
+            Math.max(3, Math.ceil((vw + 2 * LOAD_MARGIN) / half) + 2)
           );
           // grow-only (b35): bidirectional resizing let a jittery re-measure
           // flap the copy count and read as a "reset" — growth is capped, so
@@ -313,23 +303,21 @@ function ScrollRow({
             repsRef.current = needed;
             setReps(needed);
           }
-          // b36: apply the base shift ONLY once the grown copies are actually
-          // committed — until then -B would push the initial 3 copies wholly
-          // left of the screen (cold phones: "everything on the left, plain
-          // space"). Unshifted, the screen always shows layout [p, p+vw].
-          const Bok = committedRepsRef.current >= needed;
-          const Bv = Bok ? B : 0;
-          baseShiftRef.current = Bv;
-          track.style.transform = `translate3d(${-(p + Bv)}px, 0, 0)`;
-          const next = new Set<number>();
+          // b37 LATCH: once an index has been in range, it NEVER leaves —
+          // removing src unloads the bitmap and pops it back on re-entry
+          // (the "dragging makes it flashy" report, confirmed by phone CDP:
+          // src counts flapped 22/23 → 22/22 → 23/23 while idle). The set
+          // only ever grows, bounded by photos-per-day per row.
+          const next = new Set(latchedRef.current);
           for (let c = 0; c < repsRef.current; c++) {
             const cOff = c * half;
             for (let i = 0; i < spans.length; i++) {
-              const l = spans[i].l + cOff - p - Bv;
-              const r = spans[i].r + cOff - p - Bv;
+              const l = spans[i].l + cOff - p;
+              const r = spans[i].r + cOff - p;
               if (r > -LOAD_MARGIN && l < vw + LOAD_MARGIN) next.add(i);
             }
           }
+          latchedRef.current = next;
           setInRange(next);
           return;
         }
