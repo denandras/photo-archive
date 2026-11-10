@@ -343,8 +343,14 @@ body {
     width: 9px;
     height: 9px;
   }
+  /* b38: NO inter-copy gap on mobile (was gap: 10px). Copies already carry a
+     14px trailing pad, so any extra track gap breaks the seamless tiling
+     invariant — copies actually sat at c·(half+10) while all marquee/loading
+     math (posRef mod half, span + c·half, wrap = identical pixels) assumes
+     c·half. On the phone this showed as a ~24px black seam + jump at every
+     wrap; desktop copy-count-1 renders never hit it. */
   .scroll-track {
-    gap: 10px;
+    gap: 0;
   }
 }
 
