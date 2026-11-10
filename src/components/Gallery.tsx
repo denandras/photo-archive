@@ -87,9 +87,11 @@ function PhotoCard({
 function LightboxStage({
   photo,
   onBusyChange,
+  closing,
 }: {
   photo: Photo;
   onBusyChange?: (busy: boolean) => void;
+  closing?: boolean;
 }) {
   type SlotLb = { photo: Photo | null; loaded: boolean; above: boolean };
   const [slots, setSlots] = useState<SlotLb[]>([
@@ -162,11 +164,36 @@ function LightboxStage({
     }, 950);
   }, [finalize]);
 
+  /* b46b: closing while a swap is mid-flight — freeze the stage: drop the
+     incoming slot immediately (its expand choreography would fight the close
+     collapse), keep the settled image, release the busy gate. The close then
+     plays on a static, settled stage. */
+  useEffect(() => {
+    if (!closing) return;
+    if (fallbackTimer.current) {
+      clearTimeout(fallbackTimer.current);
+      fallbackTimer.current = null;
+    }
+    clearBusyWatch();
+    setBusy(false);
+    if (incomingRef.current !== null) {
+      incomingRef.current = null;
+      setSlots(prev =>
+        prev.map((s, i) =>
+          i === activeRef.current
+            ? { ...s, above: false }
+            : { photo: null, loaded: false, above: false }
+        )
+      );
+    }
+  }, [closing, clearBusyWatch, setBusy]);
+
   useEffect(() => {
     if (shownRef.current === photo.full) return;
     const first = shownRef.current === null;
     shownRef.current = photo.full;
     if (first) return;
+    if (closing) return; // b46b: freeze swaps while the close is playing
     // b46: swap begins — gate further swipes until it settles
     if (incomingRef.current === null || busyRef.current) setBusy(true);
     armBusyWatch();
@@ -827,7 +854,7 @@ export default function Gallery({
             {/* Safe-viewport box: sits between the iOS browser bars, which
                 overlap plain fixed/vh sizes — top AND bottom were cut. */}
             <div className="lightbox-fit">
-              <LightboxStage photo={lightbox.photos[lightbox.index]} onBusyChange={handleLbBusy} />
+              <LightboxStage photo={lightbox.photos[lightbox.index]} onBusyChange={handleLbBusy} closing={lbClosing} />
               {lightbox.photos.length > 1 && (
                 <>
                   <span className="lightbox-counter">
