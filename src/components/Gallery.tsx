@@ -225,6 +225,9 @@ function ScrollRow({
   const latchedRef = useRef<Set<number>>(new Set()); // b37: indices that keep src forever
   const inRangeRef = useRef<Set<number>>(new Set());
   const [inRange, setInRangeState] = useState<Set<number>>(new Set());
+  const lastPaintRef = useRef(-1); // b41: skip transform writes for sub-pixel moves
+  const bandCheckRef = useRef(0); // b41: throttle the per-frame rect read
+  const bandVisibleRef = useRef(true); // cached ±900 vertical-band verdict
   // setState only when the set actually changes (rAF loop calls every frame)
   const setInRange = useCallback((next: Set<number>) => {
     const prev = inRangeRef.current;
@@ -273,16 +276,34 @@ function ScrollRow({
        promotion in WebKit: with will-change gone, a 3D matrix would still
        hand the whole max-content track to the compositor and hit Metal's
        16,384-device-px texture ceiling (⇒ iPhone rows paint blank then
-       "die"). 2D translateX paints through the tiled main-thread path. */
-    track.style.transform = `translateX(${-p}px)`;
+       "die"). 2D translateX paints through the tiled main-thread path.
+
+       b41b: main-thread painting must stay CHEAP or iOS gets tap-dead
+       (12 strips repainted every frame starve the event loop). The marquee
+       moves ~0.35px/frame — write the transform only when ~1.25px have
+       accumulated (≈15Hz instead of 60Hz), or during drags/inertia when
+       movement per frame is larger anyway. Motion stays sub-pixel-smooth;
+       latching below is position-based and unaffected. */
+    const moved = Math.abs(p - (lastPaintRef.current < 0 ? p : lastPaintRef.current));
+    const shouldPaint = lastPaintRef.current < 0 || moved >= 1.25 || isDragging.current;
+    const paint = () => {
+      lastPaintRef.current = p;
+      track.style.transform = `translateX(${-p}px)`;
+    };
+    if (shouldPaint) paint();
 
     // b31: derive which cards are in load range from the marquee math —
     // direction-symmetric, clip-proof (IO margins are defeated by the rows'
     // overflow clipping, so IO can't do this job at all).
+    // b41b: the rect read happens every ~10th frame; between checks the last
+    // verdict (±900 band) is reused. Scrolling still triggers prompt checks
+    // because scroll changes land within a frame or two of the next read.
     const viewport = viewportRef.current;
-    if (viewport) {
+    if (viewport && (++bandCheckRef.current % 10 === 0 || !spansRef.current)) {
       const rc = viewport.getBoundingClientRect();
-      if (rc.bottom > -V_BAND && rc.top < innerHeight + V_BAND) {
+      bandVisibleRef.current = rc.bottom > -V_BAND && rc.top < innerHeight + V_BAND;
+    }
+    if (viewport && bandVisibleRef.current) {
         if (!spansRef.current) {
           const copy = track.firstElementChild;
           if (copy) {
@@ -326,8 +347,8 @@ function ScrollRow({
           return;
         }
       }
-    }
-    track.style.transform = `translateX(${-p}px)`;
+    // Out-of-band rows only repaint (no latching) — same cheapness guard.
+    if (shouldPaint) paint();
   }, [measureHalf, setInRange]);
 
   // Marquee loop via rAF + transform (compositor-friendly, works on iOS)
