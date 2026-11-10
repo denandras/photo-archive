@@ -286,7 +286,6 @@ function ScrollRow({
     spansRef.current = spans;
     halfRef.current = half;
     return true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photos.length]);
 
   /* b44 wave: reposition every instance so coverage [−M, −M + K·half) lines up
@@ -342,6 +341,16 @@ function ScrollRow({
         }
       }
       if (inBandRef.current && measured.current) {
+        /* b44b: DETERMINISTIC placement — the poolK-effect syncWave raced
+           measure completion (some mount orders got placed, others never
+           did until drift > half/2; the unplaced rows stacked every instance
+           at x=0 ⇒ "one image, the rest empty", every 2nd row on the
+           phone). After the first successful measure — and after any pool
+           change / resize that invalidates positions — wave immediately. */
+        if (!placedRef.current) {
+          placedRef.current = true;
+          syncWave();
+        }
         if (!isDragging.current) {
           if (Math.abs(velRef.current) > 0.02) {
             posRef.current += velRef.current * dt;
@@ -391,6 +400,7 @@ function ScrollRow({
 
   const lastFrameRef = useRef(0);
   const lastDriftRef = useRef<number | null>(null);
+  const placedRef = useRef(false); // b44b: coverage instances placed at least once
 
   useEffect(() => {
     lastFrameRef.current = 0;
@@ -398,6 +408,7 @@ function ScrollRow({
     const onResize = () => {
       measured.current = false;
       spansRef.current = null;
+      placedRef.current = false;
     };
     window.addEventListener("resize", onResize);
     return () => {
@@ -406,11 +417,13 @@ function ScrollRow({
     };
   }, [tick]);
 
-  /* Force a re-sync after the pool grows (new children carry default
-     transforms); the tick loop measures on the next frames anyway. */
+  /* After a pool change the DOM children are fresh (empty transforms) — the
+     tick loop's placedRef gate re-places them on the next frame. (Resize
+     invalidates directly in its handler.) */
   useEffect(() => {
-    if (measured.current && spansRef.current) syncWave();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    placedRef.current = false;
+    measured.current = false;
+    spansRef.current = null;
   }, [poolK]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
