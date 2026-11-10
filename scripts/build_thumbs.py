@@ -21,7 +21,7 @@ from PIL import Image, ImageOps
 Image.MAX_IMAGE_PIXELS = None
 
 from whitelist import (load_whitelist_text, parse_whitelist, is_whitelisted,
-                       is_private, get_s3_client)
+                       is_private, parse_share_list, get_s3_client)
 
 try:
     # iOS HEIC sources: decode via libheif so thumbs + JPEG fulls can build
@@ -40,6 +40,7 @@ THUMB_PREFIX = "media/thumbs/"
 FULL_PREFIX = "media/fulls/"
 KEY_VERSION = "v2"  # bump when thumb params change — old-state entries rebuild
 WHITELIST_KEY = SCAN_PREFIX + "public-list.txt"
+SHARE_LIST_KEY = SCAN_PREFIX + "share-list.txt"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".thumbs_cache.json")
 BUCKET = "tb1"
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".heic")
@@ -57,6 +58,9 @@ def load_state():
 
 def current_items(s3):
     rules = parse_whitelist(load_whitelist_text(s3, BUCKET, WHITELIST_KEY))
+    # share-list.txt folders are NOT on the landing site but need thumbs (and
+    # HEIC fulls) too — else the stale-sweep below would delete their thumbs.
+    share_rules = parse_share_list(load_whitelist_text(s3, BUCKET, SHARE_LIST_KEY))
     out = []
     pag = s3.get_paginator("list_objects_v2")
     for page in pag.paginate(Bucket=BUCKET, Prefix=SCAN_PREFIX):
@@ -65,7 +69,11 @@ def current_items(s3):
             if os.path.splitext(key)[1].lower() not in IMAGE_EXTS:
                 continue
             rel = key[len(SCAN_PREFIX):]
-            if not is_whitelisted(rel, rules) or is_private(rel):
+            if is_private(rel):
+                continue
+            in_public = is_whitelisted(rel, rules)
+            in_share = any(is_whitelisted(rel, [rule]) for _s, rule in share_rules)
+            if not in_public and not in_share:
                 continue
             out.append({"key": key, "size": obj["Size"], "etag": obj["ETag"]})
     return out

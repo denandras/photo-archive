@@ -22,14 +22,17 @@ from datetime import datetime
 
 import boto3
 
-from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private
+from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private, \
+    parse_share_list
 
 OUTPUT_FILE = "public/manifest.json"
+SHARES_DIR = "public/shares"
 CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".manifest_cache.json")
 PUBLISH_TAG = "public"  # kept for cache compat; whitelist file is authoritative now
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".heic")
 SCAN_PREFIX = "media/kepek/Saját képek/"
 WHITELIST_KEY = SCAN_PREFIX + "public-list.txt"
+SHARE_LIST_KEY = SCAN_PREFIX + "share-list.txt"
 HEAD_BYTES = 262144  # 256 KB covers EXIF + IPTC segments of any X100V JPEG
 EXIFTOOL_FIELDS = ["-DateTimeOriginal", "-CreateDate", "-DateTime", "-Keywords",
                    "-Subject", "-XPKeywords", "-ImageWidth", "-ImageHeight"]
@@ -98,6 +101,95 @@ def probe(s3, key):
             "width": rec.get("ImageWidth"), "height": rec.get("ImageHeight")}
 
 
+def ensure_probed(s3, obj, cache, fetched_ref):
+    """Probe one file through the cache; returns the metadata record.
+    fetched_ref: [fetched_counter, reused_counter] (mutated in place)."""
+    ckey = f"{obj['key']}|{obj['size']}|{obj['etag']}"
+    rec = cache.get(ckey)
+    if rec and (rec.get("dt") or rec.get("attempts", 0) >= 3):
+        fetched_ref[1] += 1
+        return rec
+    try:
+        rec = probe(s3, obj["key"])
+    except Exception as e:
+        print(f"  skip {obj['key']}: {e}")
+        rec = {"dt": None, "keywords": [], "width": None, "height": None}
+    if not rec.get("dt"):
+        rec["attempts"] = (rec.get("attempts") or (cache.get(ckey) or {}).get("attempts", 0) or 0) + 1
+    else:
+        rec.pop("attempts", None)
+    cache[ckey] = rec
+    fetched_ref[0] += 1
+    return rec
+
+
+def resolve_dt(rec, rel_key, counters):
+    """EXIF date -> manifest record; falls back to the date-prefixed folder
+    name when EXIF carries no date. Mutates counters dict."""
+    if not rec.get("dt"):
+        m = re.search(r"\d{4}-\d{2}-\d{2}", rel_key)
+        if m:
+            try:
+                rec = {**rec, "dt": datetime.strptime(m.group(0), "%Y-%m-%d").strftime("%Y:%m:%d 00:00:00")}
+                counters["pathdated"] += 1
+            except ValueError:
+                pass
+    if not rec.get("dt"):
+        counters["untagged"] += 1
+        return None
+    try:
+        return datetime.strptime(str(rec["dt"])[:19], "%Y:%m:%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def build_shares(s3, all_images, cache, fetched_ref):
+    """Build public/shares/<slug>.json for every folder in share-list.txt.
+    Unlisted on the landing site; each folder becomes one slug page."""
+    share_text = load_whitelist_text(s3, BUCKET, SHARE_LIST_KEY)
+    share_rules = parse_share_list(share_text)
+    print(f"Share list: {len(share_rules)} shared folder(s)")
+    os.makedirs(SHARES_DIR, exist_ok=True)
+
+    counters = {"untagged": 0, "pathdated": 0}
+    index = {}
+    for slug, rule in share_rules:
+        targets = [o for o in all_images
+                   if is_whitelisted(o["key"][len(SCAN_PREFIX):], [rule])
+                   and not is_private(o["key"][len(SCAN_PREFIX):])]
+        photos = []
+        for obj in targets:
+            rel = obj["key"][len(SCAN_PREFIX):]
+            rec = ensure_probed(s3, obj, cache, fetched_ref)
+            if fetched_ref[0] % 25 == 0:
+                with open(CACHE_FILE, "w") as f:
+                    json.dump(cache, f)
+            dt = resolve_dt(rec, rel, counters)
+            if dt is None:
+                continue
+            photos.append({
+                "key": obj["key"][PREFIX_TRIM:],
+                "name": os.path.basename(obj["key"]),
+                "time": dt.isoformat(),
+                "width": rec["width"],
+                "height": rec["height"],
+            })
+        photos.sort(key=lambda p: p["time"])
+        with open(os.path.join(SHARES_DIR, f"{slug}.json"), "w") as f:
+            json.dump({"slug": slug, "folder": rule, "photos": photos}, f, indent=2)
+        index[slug] = {"folder": rule, "photos": len(photos)}
+        print(f"  /s/{slug}: {rule} -> {len(photos)} photo(s)")
+
+    # drop share pages whose folder left the list
+    for fn in os.listdir(SHARES_DIR):
+        if fn.endswith(".json") and fn != "index.json" and fn[:-5] not in index:
+            os.remove(os.path.join(SHARES_DIR, fn))
+            print(f"removed stale share file {fn}")
+    with open(os.path.join(SHARES_DIR, "index.json"), "w") as f:
+        json.dump(index, f, indent=2)
+    return counters
+
+
 def main():
     limit = int(sys.argv[1]) if len(sys.argv) > 1 else None  # test mode
 
@@ -126,50 +218,23 @@ def main():
           f"{priv_n} .p-private excluded")
 
     manifest = {"years": {}}
-    fetched = reused = public_n = untagged = pathdated = 0
+    fetched_ref = [0, 0]  # [fetched, reused]
+    untagged = pathdated = 0
+    public_n = 0
 
     for i, obj in enumerate(images):
-        ckey = f"{obj['key']}|{obj['size']}|{obj['etag']}"
-        rec = cache.get(ckey)
-        if rec and (rec.get("dt") or rec.get("attempts", 0) >= 3):
-            reused += 1
-        else:
-            # Transient S3/exiftool failures (e.g. right after a rename) must
-            # not poison the cache forever: retry no-date records a few times.
-            try:
-                rec = probe(s3, obj["key"])
-            except Exception as e:
-                print(f"  skip {obj['key']}: {e}")
-                rec = {"dt": None, "keywords": [], "width": None, "height": None}
-            if not rec.get("dt"):
-                rec["attempts"] = (rec.get("attempts") or (cache.get(ckey) or {}).get("attempts", 0) or 0) + 1
-            else:
-                rec.pop("attempts", None)
-            cache[ckey] = rec
-            fetched += 1
-            if fetched % 25 == 0:
-                print(f"  {i + 1}/{len(images)} (fetched {fetched}, cached {reused})")
-                # persist cache incrementally so a kill loses nothing
-                with open(CACHE_FILE, "w") as f:
-                    json.dump(cache, f)
+        rec = ensure_probed(s3, obj, cache, fetched_ref)
+        fetched, reused = fetched_ref
+        if fetched and fetched % 25 == 0:
+            print(f"  {i + 1}/{len(images)} (fetched {fetched}, cached {reused})")
+            with open(CACHE_FILE, "w") as f:
+                json.dump(cache, f)
 
-        # EXIF may be absent (e.g. Panasonic JPEGs without any date tag);
-        # folders in this bucket are date-prefixed -> fall back to that.
-        if not rec.get("dt"):
-            m = re.search(r"\d{4}-\d{2}-\d{2}", obj["key"][len(SCAN_PREFIX):])
-            if m:
-                try:
-                    rec = {**rec, "dt": datetime.strptime(m.group(0), "%Y-%m-%d").strftime("%Y:%m:%d 00:00:00")}
-                    cache[ckey] = rec
-                    pathdated += 1
-                except ValueError:
-                    pass
-        if not rec.get("dt"):
-            untagged += 1
-            continue
-        try:
-            dt = datetime.strptime(str(rec["dt"])[:19], "%Y:%m:%d %H:%M:%S")
-        except ValueError:
+        counters = {"untagged": 0, "pathdated": 0}
+        dt = resolve_dt(rec, obj["key"][len(SCAN_PREFIX):], counters)
+        untagged += counters["untagged"]
+        pathdated += counters["pathdated"]
+        if dt is None:
             continue
 
         public_n += 1
@@ -189,8 +254,15 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(OUTPUT_FILE)), exist_ok=True)
     with open(OUTPUT_FILE, "w") as f:
         json.dump(manifest, f, indent=2)
+
+    # Unlisted share pages: public/shares/<slug>.json from share-list.txt
+    share_counters = build_shares(s3, all_images, cache, fetched_ref)
+    untagged += share_counters["untagged"]
+    pathdated += share_counters["pathdated"]
+
     with open(CACHE_FILE, "w") as f:
         json.dump(cache, f)
+    fetched, reused = fetched_ref
     print(f"Fetched {fetched} new / reused {reused} cached | {untagged} untagged | "
           f"{pathdated} folder-dated | manifest: {len(manifest['years'])} yr(s), {public_n} public photos.")
 

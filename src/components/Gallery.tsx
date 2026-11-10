@@ -93,7 +93,7 @@ function PhotoCard({
    starts the moment the close settles. No two images are ever visible at
    once, and nothing stays open behind the new one. Close (✕ / backdrop)
    freezes any mid-swap stage to its settled image. ===== */
-function LightboxStage({
+export function LightboxStage({
   photo,
   onBusyChange,
   closing,
@@ -333,16 +333,19 @@ function LightboxStage({
   );
 }
 
-function ScrollRow({
+/* Exported for the share-roll page (own Gallery shell, same mech/look). */
+export function ScrollRow({
   photos,
   direction,
   day,
   onOpen,
+  variant,
 }: {
   photos: Photo[];
   direction: "left" | "right";
   day: string;
   onOpen: (index: number) => void;
+  variant?: "share"; // bigger cards, single-roll share pages
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   /* b44 WINDOWED RING: the huge max-content track is GONE. What remains is a
@@ -627,7 +630,7 @@ function ScrollRow({
 
   return (
     <div
-      className="scroll-viewport"
+      className={`scroll-viewport${variant === "share" ? " share-roll" : ""}`}
       ref={viewportRef}
       data-day={day}
       onPointerDown={handlePointerDown}

@@ -49,11 +49,20 @@ export async function GET(request: NextRequest) {
   // so nothing transits Vercel except this tiny signed URL. The origin's
   // response is authoritative — thumbs carry immutable caching set at upload,
   // and the presign pins the same cache policy for originals.
+  // `dl=<filename>` forces a download instead of inline display: the presign
+  // pins Content-Disposition on the origin response (works across the 307,
+  // which an anchor `download` attr alone would not).
   try {
+    const dlName = (searchParams.get("dl") || "")
+      .replace(/[^\w.\- ()]/g, "_")
+      .slice(0, 120);
     const command = new GetObjectCommand({
       Bucket: "tb1",
       Key: `media/${key}`,
       ResponseCacheControl: "public, max-age=31536000, immutable",
+      ...(dlName
+        ? { ResponseContentDisposition: `attachment; filename="${dlName}"` }
+        : {}),
     });
     const url = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
     return new NextResponse(null, {
