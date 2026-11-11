@@ -351,6 +351,93 @@ body {
   }
 }
 
+/* ===== Initial reveal (b56): corner-mark frame flashes in the middle, =====
+   ===== then the big picture-opening expands it over the landing page ===== */
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+.intro-frame {
+  position: relative;
+  width: 42vw;
+  height: 28vw;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 9%;
+  opacity: 0;
+  animation: introFlash 0.95s steps(1, end) 1 forwards;
+}
+.intro-t1 {
+  font-family: var(--font-geist-sans), sans-serif;
+  font-size: clamp(1rem, 2.4vw, 1.6rem);
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+}
+.intro-t2 {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14%;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: clamp(0.6rem, 1.1vw, 0.8rem);
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+}
+/* L corner markers on the flashing frame — same grammar as the photo cards */
+.intro-frame .corner {
+  border-color: rgba(255, 255, 255, 0.55);
+  width: 9px;
+  height: 9px;
+  position: absolute;
+}
+.intro-frame .corner.tl { top: 5px; left: 5px; }
+.intro-frame .corner.tr { top: 5px; right: 5px; }
+.intro-frame .corner.bl { bottom: 5px; left: 5px; }
+.intro-frame .corner.br { bottom: 5px; right: 5px; }
+/* The big opening: frame expands over the viewport while the screen fades,
+   the corner marks riding the edges out to the viewport corners */
+.intro-opening .intro-frame {
+  transition: width 0.95s cubic-bezier(0.16, 1, 0.3, 1),
+              height 0.95s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.3s ease 0.78s;
+  width: 100vw;
+  height: 100svh;
+  padding-bottom: 40px;
+}
+.intro-opening .intro-t1,
+.intro-opening .intro-t2 {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.intro-opening {
+  animation: introFade 0.32s ease 0.9s forwards;
+}
+@keyframes introFade {
+  to { opacity: 0; }
+}
+@keyframes introFlash {
+  0% { opacity: 0; }
+  28% { opacity: 1; }
+  42% { opacity: 0.15; }
+  55% { opacity: 1; }
+  68% { opacity: 0.1; }
+  80% { opacity: 1; }
+  100% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro, .intro-frame { display: none; }
+}
+
 /* ===== Download prevention ===== */
 .scroll-viewport img {
   -webkit-user-drag: none;

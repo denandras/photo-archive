@@ -1,5 +1,6 @@
 import { loadManifest } from "@/lib/manifest";
 import Gallery from "@/components/Gallery";
+import Intro from "@/components/Intro";
 import { SiteHeader } from "@/components/Header";
 import { SiteFooter } from "@/components/Footer";
 import BuildWatchdog from "@/components/BuildWatchdog";
@@ -58,6 +59,7 @@ export default async function Page() {
   return (
     <main className="min-h-screen bg-black text-white overflow-x-hidden">
       <BuildWatchdog />
+      <Intro />
       <SiteHeader />
       <div className="px-4 pb-32">
         {hasPhotos ? (
