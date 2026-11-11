@@ -917,21 +917,32 @@ export default function Gallery({
     if (idx >= 0) setLightbox({ photos, index: idx, meta: { year: y, day: d } });
   }, [data]);
 
+  const writeUrl = useCallback((mk: () => string, force = false) => {
+    const now = Date.now();
+    if (!force && now - lastWriteRef.current < 1200) return;
+    lastWriteRef.current = now;
+    try {
+      history.replaceState(null, "", mk());
+    } catch {
+      /* Safari rate limit — drop this write; the next tick converges */
+    }
+  }, []);
+
   const syncLightboxUrl = useCallback(
     (lb: { photos: Photo[]; index: number; meta: { year: string; day: string } } | null) => {
       if (!lb) {
         // b54: closing the lightbox leaves the address bar at the landing —
         // the old code only stripped `i`, so the last photo's y/d lingered.
-        history.replaceState(null, "", window.location.pathname);
+        writeUrl(() => window.location.pathname, true); // forced: state event
         return;
       }
       const params = new URLSearchParams(window.location.search);
       params.set("y", lb.meta.year);
       params.set("d", lb.meta.day);
       params.set("i", lb.photos[lb.index]?.key.split("/").pop() || "");
-      history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+      writeUrl(() => `${window.location.pathname}?${params.toString()}`, true);
     },
-    []
+    [writeUrl]
   );
 
   // b54: the URL follows scroll position. Topmost visible day row -> ?y&d
@@ -949,14 +960,20 @@ export default function Gallery({
     []
   );
   const topRowRef = useRef<string>(""); // "<year>/<day>" the tracker last saw on top
+  const lastWriteRef = useRef(0);
+  /* b56b: rate-limited + exception-safe history writes. Mobile Safari
+     hard-throws SecurityError past ~100 replaceState calls per 30 s — an
+     uncaught throw here took the whole page down (the "This page couldn't
+     load" report at the roll end, where front-index writes spike under
+     drags). Chrome only silently throttles, so desktop never showed it. */
   const writeScrollUrl = useCallback((year: string, day: string, front: number) => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("i")) return; // lightbox owns the URL
     params.set("y", year);
     params.set("d", day);
     params.set("p", String(front));
-    history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
-  }, []);
+    writeUrl(() => `${window.location.pathname}?${params.toString()}`);
+  }, [writeUrl]);
   const handleFront = useCallback(
     (year: string, day: string, front: number) => {
       if (window.scrollY <= 12) return; // at the landing: top stays clean
@@ -1009,11 +1026,9 @@ export default function Gallery({
       if (key === lastKey && full === lastFull) return;
       if (key !== lastKey) lastKey = key;
       lastFull = full;
-      if (!key) {
-        history.replaceState(null, "", window.location.pathname);
-      } else {
-        history.replaceState(null, "", `${window.location.pathname}?${full}`);
-      }
+      writeUrl(() =>
+        key ? `${window.location.pathname}?${full}` : window.location.pathname
+      );
     };
     const onScroll = () => {
       if (!raf) raf = requestAnimationFrame(track);
@@ -1028,7 +1043,7 @@ export default function Gallery({
       window.clearInterval(iv);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [mounted]);
+  }, [mounted, writeUrl]);
 
   // Keyboard nav + scroll lock when lightbox is open
   useEffect(() => {
