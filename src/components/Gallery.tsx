@@ -340,12 +340,14 @@ export function ScrollRow({
   day,
   onOpen,
   variant,
+  year,
 }: {
   photos: Photo[];
   direction: "left" | "right";
   day: string;
   onOpen: (index: number) => void;
   variant?: "share"; // bigger cards, single-roll share pages
+  year?: string; // landing page: URL-scroll bookkeeping
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   /* b44 WINDOWED RING: the huge max-content track is GONE. What remains is a
@@ -633,6 +635,7 @@ export function ScrollRow({
       className={`scroll-viewport${variant === "share" ? " share-roll" : ""}`}
       ref={viewportRef}
       data-day={day}
+      data-year={year}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -759,6 +762,7 @@ function YearSection({
               photos={photos}
               direction={i % 2 === 0 ? "right" : "left"}
               day={day}
+              year={year}
               onOpen={(index) => onPhotoClick(photos, index, { year, day })}
             />
           ))}
@@ -842,16 +846,68 @@ export default function Gallery({
 
   const syncLightboxUrl = useCallback(
     (lb: { photos: Photo[]; index: number; meta: { year: string; day: string } } | null) => {
-      const params = new URLSearchParams(window.location.search);
-      if (lb) {
-        params.set("y", lb.meta.year);
-        params.set("d", lb.meta.day);
-        params.set("i", lb.photos[lb.index]?.key.split("/").pop() || "");
-      } else {
-        params.delete("i");
+      if (!lb) {
+        // b54: closing the lightbox leaves the address bar at the landing —
+        // the old code only stripped `i`, so the last photo's y/d lingered.
+        history.replaceState(null, "", window.location.pathname);
+        return;
       }
+      const params = new URLSearchParams(window.location.search);
+      params.set("y", lb.meta.year);
+      params.set("d", lb.meta.day);
+      params.set("i", lb.photos[lb.index]?.key.split("/").pop() || "");
       history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
-    }, []);
+    },
+    []
+  );
+
+  // b54: the URL follows scroll position. Topmost visible day row -> ?y&d
+  // (no `i`); back at the very top -> bare landing path. rAF-throttled and
+  // only a replaceState when the day CHANGE — no re-render, near-zero cost.
+  useEffect(() => {
+    if (!mounted) return;
+    let raf = 0;
+    let lastKey = "";
+    const track = () => {
+      raf = 0;
+      if (lbBusyRef.current || document.body.style.overflow === "hidden") return;
+      const params = new URLSearchParams(window.location.search);
+      const lbOpen = params.get("i"); // lightbox owns the URL while open
+      if (lbOpen) return;
+      let nextKey = "";
+      const y = window.scrollY;
+      if (y > 12) {
+        // first day row whose bottom edge is below the sticky-header band
+        const rows = document.querySelectorAll<HTMLElement>(".scroll-viewport[data-day]");
+        for (const row of rows) {
+          const sec = row.closest(".year-section");
+          if (sec?.classList.contains("collapsed")) continue; // clipped rows still lay out — skip
+          const r = row.getBoundingClientRect();
+          if (r.bottom > 60 && r.height > 0) {
+            const day = row.getAttribute("data-day") || "";
+            const year = row.getAttribute("data-year") || "";
+            nextKey = `y=${year}&d=${day}`;
+            break;
+          }
+        }
+      }
+      if (nextKey === lastKey) return;
+      lastKey = nextKey;
+      if (!nextKey) {
+        history.replaceState(null, "", window.location.pathname);
+      } else {
+        history.replaceState(null, "", `${window.location.pathname}?${nextKey}`);
+      }
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(track);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [mounted]);
 
   // Keyboard nav + scroll lock when lightbox is open
   useEffect(() => {
