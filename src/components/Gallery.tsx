@@ -341,6 +341,9 @@ export function ScrollRow({
   onOpen,
   variant,
   year,
+  registerApi,
+  onFrontChange,
+  restoreFront,
 }: {
   photos: Photo[];
   direction: "left" | "right";
@@ -348,7 +351,24 @@ export function ScrollRow({
   onOpen: (index: number) => void;
   variant?: "share"; // bigger cards, single-roll share pages
   year?: string; // landing page: URL-scroll bookkeeping
+  registerApi?: (key: string, api: { getFront: () => number } | null) => void;
+  onFrontChange?: (front: number) => void; // b55: fine-grained permalinks
+  restoreFront?: number | null; // b55: restore ?p= after the geometry measures
 }) {
+  const frontRef = useRef(0); // photo index currently at the left viewport edge
+  const onFrontChangeRef = useRef(onFrontChange);
+  onFrontChangeRef.current = onFrontChange;
+  const restoreRef = useRef<number | null>(restoreFront ?? null);
+  const frontCheckRef = useRef(0);
+  useEffect(() => {
+    restoreRef.current = restoreFront ?? null; // re-armed when the prop changes
+  }, [restoreFront]);
+  useEffect(() => {
+    if (!registerApi) return;
+    const key = `${year ?? ""}/${day}`;
+    registerApi(key, { getFront: () => frontRef.current });
+    return () => registerApi(key, null);
+  }, [registerApi, year, day]);
   const viewportRef = useRef<HTMLDivElement>(null);
   /* b44 WINDOWED RING: the huge max-content track is GONE. What remains is a
      zero-width group element whose COMPOSITED LAYER covers only the painted
@@ -488,6 +508,22 @@ export function ScrollRow({
         }
       }
       if (inBandRef.current && measured.current) {
+        /* b55 restore ?p= — once spans are measured, shift the anchored
+           position so the linked photo's left edge sits at the viewport
+           edge, then re-place instances on this same tick. */
+        if (restoreRef.current !== null && spansRef.current && halfRef.current) {
+          const idx = Math.max(0, restoreRef.current);
+          const target = spansRef.current[idx % spansRef.current.length];
+          restoreRef.current = null;
+          if (target) {
+            const half0 = halfRef.current;
+            const want = ((target.l + 2) % half0 + half0) % half0;
+            const cur = ((posRef.current % half0) + half0) % half0;
+            posRef.current += want - cur;
+            pSyncRef.current = posRef.current;
+            syncWave();
+          }
+        }
         /* b44b: DETERMINISTIC placement — the poolK-effect syncWave raced
            measure completion (some mount orders got placed, others never
            did until drift > half/2; the unplaced rows stacked every instance
@@ -534,6 +570,25 @@ export function ScrollRow({
           }
           latchedRef.current = next;
           setInRange(next);
+          // b55: which photo sits at the viewport's left edge right now —
+          // the fine-position unit of the permalink. Sampled every 6th
+          // frame; fires ONLY on an index change (≈ once every 15–30 s
+          // while auto-streaming, never per-pixel).
+          if (++frontCheckRef.current % 6 === 0) {
+            const sp = spansRef.current;
+            if (sp && sp.length && half > 0) {
+              const x0 = ((posRef.current % half) + half) % half;
+              let f = 0;
+              for (let i = 0; i < sp.length; i++) {
+                f = i;
+                if (x0 < sp[i].r) break;
+              }
+              if (f !== frontRef.current) {
+                frontRef.current = f;
+                onFrontChangeRef.current?.(f);
+              }
+            }
+          }
         }
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -666,12 +721,18 @@ function YearSection({
   onPhotoClick,
   anchorDay,
   stayOpen,
+  restore,
+  registerApi,
+  onFrontChange,
 }: {
   year: string;
   days: Record<string, Photo[]>;
   onPhotoClick: (photos: Photo[], index: number, meta: { year: string; day: string }) => void;
   anchorDay: string | null; // permalink ?d=: scroll this day row into view
   stayOpen: boolean; // permalink ?y=: expand this year on load
+  restore: { day: string; front: number } | null; // b55: ?p= marquee restore
+  registerApi?: (key: string, api: { getFront: () => number } | null) => void;
+  onFrontChange?: (year: string, day: string, front: number) => void;
 }) {
   const [collapsed, setCollapsed] = useState(true);
   const dayEntries = Object.entries(days);
@@ -764,6 +825,9 @@ function YearSection({
               day={day}
               year={year}
               onOpen={(index) => onPhotoClick(photos, index, { year, day })}
+              registerApi={registerApi}
+              onFrontChange={onFrontChange ? (f) => onFrontChange(year, day, f) : undefined}
+              restoreFront={restore?.day === day ? restore.front : null}
             />
           ))}
         </div>
@@ -783,6 +847,9 @@ export default function Gallery({
     meta: { year: string; day: string };
   } | null>(null);
   const [mounted, setMounted] = useState(false);
+  /* b55: ?p=<front index> from a shared link — restore that row's marquee
+     position once it has measured. null = plain load. */
+  const [restore, setRestore] = useState<{ day: string; front: number } | null>(null);
   /* b42: lightbox CLOSING animation — the open choreography's exact inverse
      (overlay fades, loaded image collapses to the center point, corners
      converge). The overlay stays mounted ~700ms, then unmounts. */
@@ -829,16 +896,22 @@ export default function Gallery({
     []
   );
 
-  // Permalinks: ?y=YEAR[&d=YYYY-MM-DD[&i=filename.jpg]] preselect a year,
-  // a day row and/or open a photo's lightbox directly (shareable URLs).
+  // Permalinks: ?y=YEAR[&d=YYYY-MM-DD[&i=filename.jpg[&p=<front index>]]]
+  // preselect a year, a day row, restore the marquee position and/or open a
+  // photo's lightbox directly (shareable URLs).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const y = params.get("y");
     const d = params.get("d");
     const i = params.get("i");
+    const p = params.get("p");
     if (!y || !data[y]) return;
     if (!d) return;
     const photos = data[y][d];
+    if (p && photos) {
+      const front = Math.max(0, Math.min(photos.length - 1, Number(p) || 0));
+      setRestore({ day: d, front });
+    }
     if (!photos || !i) return;
     const idx = photos.findIndex((p) => p.key.split("/").pop() === i);
     if (idx >= 0) setLightbox({ photos, index: idx, meta: { year: y, day: d } });
@@ -864,47 +937,95 @@ export default function Gallery({
   // b54: the URL follows scroll position. Topmost visible day row -> ?y&d
   // (no `i`); back at the very top -> bare landing path. rAF-throttled and
   // only a replaceState when the day CHANGE — no re-render, near-zero cost.
+  // b55: the URL also carries `&p=<front photo index>` — where the topmost
+  // row's marquee stands — from the row registry, so a copied link restores
+  // the exact streaming position, not just the day.
+  const rowApiRef = useRef<Map<string, { getFront: () => number }>>(new Map());
+  const registerRow = useCallback(
+    (key: string, api: { getFront: () => number } | null) => {
+      if (api) rowApiRef.current.set(key, api);
+      else rowApiRef.current.delete(key);
+    },
+    []
+  );
+  const topRowRef = useRef<string>(""); // "<year>/<day>" the tracker last saw on top
+  const writeScrollUrl = useCallback((year: string, day: string, front: number) => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("i")) return; // lightbox owns the URL
+    params.set("y", year);
+    params.set("d", day);
+    params.set("p", String(front));
+    history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+  }, []);
+  const handleFront = useCallback(
+    (year: string, day: string, front: number) => {
+      if (window.scrollY <= 12) return; // at the landing: top stays clean
+      if (topRowRef.current === `${year}/${day}`) writeScrollUrl(year, day, front);
+    },
+    [writeScrollUrl]
+  );
   useEffect(() => {
     if (!mounted) return;
     let raf = 0;
     let lastKey = "";
+    let lastFull = "";
     const track = () => {
       raf = 0;
       if (lbBusyRef.current || document.body.style.overflow === "hidden") return;
       const params = new URLSearchParams(window.location.search);
-      const lbOpen = params.get("i"); // lightbox owns the URL while open
-      if (lbOpen) return;
-      let nextKey = "";
-      const y = window.scrollY;
-      if (y > 12) {
-        // first day row whose bottom edge is below the sticky-header band
+      if (params.get("i")) return; // lightbox owns the URL while open
+      let key = ""; // "<year>/<day>" or "" = at the landing
+      let year = "";
+      let day = "";
+      if (window.scrollY > 12) {
+        // the day row NEAREST the viewport's vertical center (matches the
+        // permalink anchor's centering; collapsed years' clipped rows skip)
+        const mid = window.innerHeight / 2;
+        let bestDay = "";
+        let bestYear = "";
+        let bestDist = Infinity;
         const rows = document.querySelectorAll<HTMLElement>(".scroll-viewport[data-day]");
         for (const row of rows) {
           const sec = row.closest(".year-section");
-          if (sec?.classList.contains("collapsed")) continue; // clipped rows still lay out — skip
+          if (sec?.classList.contains("collapsed")) continue;
           const r = row.getBoundingClientRect();
-          if (r.bottom > 60 && r.height > 0) {
-            const day = row.getAttribute("data-day") || "";
-            const year = row.getAttribute("data-year") || "";
-            nextKey = `y=${year}&d=${day}`;
-            break;
+          if (r.bottom <= 60 || r.height <= 0) continue;
+          const dist = Math.abs((r.top + r.bottom) / 2 - mid);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestDay = row.getAttribute("data-day") || "";
+            bestYear = row.getAttribute("data-year") || "";
           }
         }
+        day = bestDay;
+        year = bestYear;
+        key = bestDay ? `${bestYear}/${bestDay}` : "";
       }
-      if (nextKey === lastKey) return;
-      lastKey = nextKey;
-      if (!nextKey) {
+      // front index of the topmost row (row registry; 0 until measured)
+      topRowRef.current = key;
+      const api = key ? rowApiRef.current.get(key) : undefined;
+      const front = key ? (api?.getFront() ?? 0) : 0;
+      const full = key ? `y=${year}&d=${day}&p=${front}` : "";
+      if (key === lastKey && full === lastFull) return;
+      if (key !== lastKey) lastKey = key;
+      lastFull = full;
+      if (!key) {
         history.replaceState(null, "", window.location.pathname);
       } else {
-        history.replaceState(null, "", `${window.location.pathname}?${nextKey}`);
+        history.replaceState(null, "", `${window.location.pathname}?${full}`);
       }
     };
     const onScroll = () => {
       if (!raf) raf = requestAnimationFrame(track);
     };
     window.addEventListener("scroll", onScroll, { passive: true });
+    // Re-evaluate even without scroll events: the WAAPI year expansion and
+    // the permalink anchor's scrollIntoView shift geometry without them (a
+    // stale transient pick otherwise sticks forever — seen on ?p loads).
+    const iv = window.setInterval(track, 1500);
     return () => {
       window.removeEventListener("scroll", onScroll);
+      window.clearInterval(iv);
       if (raf) cancelAnimationFrame(raf);
     };
   }, [mounted]);
@@ -956,6 +1077,9 @@ export default function Gallery({
           onPhotoClick={openLightbox}
           anchorDay={linkY === year ? params.get("d") : null}
           stayOpen={linkY === year || defaultYear === year}
+          restore={restore}
+          registerApi={registerRow}
+          onFrontChange={handleFront}
         />
       ))}
 
