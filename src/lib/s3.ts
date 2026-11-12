@@ -22,5 +22,5 @@ export const BROWSER_EXTS = new Set([
 // JPEG rendition the thumb builder publishes at media/fulls/<key>.jpg.
 export function fullKeyOf(key: string): string {
   const ext = key.split(".").pop()?.toLowerCase() || "";
-  return ext === "heic" || ext === "heif" ? `fulls/${key}.jpg` : key;
+  return ext === "heic" || ext === "heif" ? `_web-archive/fulls/${key}.jpg` : key;
 }

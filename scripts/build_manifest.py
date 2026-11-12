@@ -31,8 +31,9 @@ CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".manifest
 PUBLISH_TAG = "public"  # kept for cache compat; whitelist file is authoritative now
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".heic")
 SCAN_PREFIX = "media/kepek/Saját képek/"
-WHITELIST_KEY = SCAN_PREFIX + "public-list.txt"
-SHARE_LIST_KEY = SCAN_PREFIX + "share-list.txt"
+WEB_ARCHIVE = "media/_web-archive/"
+WHITELIST_KEY = WEB_ARCHIVE + "lists/public-list.txt"
+SHARE_LIST_KEY = WEB_ARCHIVE + "lists/share-list.txt"
 HEAD_BYTES = 262144  # 256 KB covers EXIF + IPTC segments of any X100V JPEG
 EXIFTOOL_FIELDS = ["-DateTimeOriginal", "-CreateDate", "-DateTime", "-Keywords",
                    "-Subject", "-XPKeywords", "-ImageWidth", "-ImageHeight"]

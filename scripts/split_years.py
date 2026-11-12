@@ -49,9 +49,10 @@ def main():
         cache = json.load(f)
 
     s3 = get_s3_client()
+    WEB_ARCHIVE = "media/_web-archive/"  # 58: whitelist lives here, not in the user's folder tree
     from whitelist import load_whitelist_text, parse_whitelist, is_whitelisted, is_private
     try:
-        rules = parse_whitelist(load_whitelist_text(s3, BUCKET, SCAN_PREFIX + "public-list.txt"))
+        rules = parse_whitelist(load_whitelist_text(s3, BUCKET, WEB_ARCHIVE + "lists/public-list.txt"))
     except Exception as e:
         # Whitelist unreachable: abort WITHOUT writing/deleting any year file —
         # an empty ruleset would wipe the whole site.

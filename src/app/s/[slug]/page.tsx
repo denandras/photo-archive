@@ -24,7 +24,7 @@ const BROWSER_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif", "avif", "heic
 // JPEG rendition the thumb builder publishes at media/fulls/<key>.jpg.
 function fullKeyOf(p: SharePhoto): string {
   const ext = p.key.split(".").pop()?.toLowerCase() || "";
-  return ext === "heic" || ext === "heif" ? `fulls/${p.key}.jpg` : p.key;
+  return ext === "heic" || ext === "heif" ? `_web-archive/fulls/${p.key}.jpg` : p.key;
 }
 
 function loadShare(slug: string): ShareFile | null {
@@ -88,7 +88,7 @@ export default async function SharePage({
           ? `${p.key.split("/").pop()}.jpg`
           : p.key.split("/").pop() || "photo.jpg";
       return {
-        src: mediaUrl(`thumbs/${p.key}`),
+        src: mediaUrl(`_web-archive/thumbs/${p.key}`),
         full: mediaUrl(fullKeyOf(p)),
         key: p.key,
         name: dlName,

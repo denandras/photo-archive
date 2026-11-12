@@ -36,10 +36,10 @@ export default async function Page() {
             const ext = p.key.split(".").pop()?.toLowerCase() || "";
             // HEIC originals are not browser-renderable — serve the JPEG rendition
             const fullKey = ext === "heic" || ext === "heif"
-              ? `fulls/${p.key}.jpg`
+              ? `_web-archive/fulls/${p.key}.jpg`
               : p.key;
             return {
-              src: `/api/media?key=${encodeURIComponent("thumbs/" + p.key)}`,
+              src: `/api/media?key=${encodeURIComponent("_web-archive/thumbs/" + p.key)}`,
               full: `/api/media?key=${encodeURIComponent(fullKey)}`,
               key: p.key,
               w: p.width || 600,
